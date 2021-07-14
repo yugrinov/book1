@@ -1,0 +1,72 @@
+---
+title: Managing Stacks
+owner: Build Service Team
+---
+
+A Stack provides the build and run images for the Cloud Native Buildpack stack that will be used in a builder.
+
+Build Service ships with the following stacks:
+
+| Name | ID |
+|---|---|
+| base | io.buildpacks.stacks.bionic |
+| default | org.cloudfoundry.stacks.cflinuxfs3 |
+| full | org.cloudfoundry.stacks.cflinuxfs3 |
+| tiny | io.paketo.stacks.tiny |
+
+Updates to these stacks are provided on the [Tanzu Network Build Service Dependencies](https://network.pivotal.io/products/tbs-dependencies/) page.
+
+<p class='note'><strong>Note:</strong> Only Build Service Admins (users with the <code>pb-admin-role</code> kubernetes ClusterRole) can perform stack commands.</p>
+
+## <a id='create-stack'></a> Creating a Stack
+
+Users can create a stack using build and run images from a Docker registry or the local machine:
+
+- If using a Docker registry:
+
+    ```
+    kp stack create <stack-name> -b <build image> -r <run-image>
+    ```
+
+<p class='note'><strong>Note:</strong> The user must have read access to the source Docker registry and write access to build service registry on the local machine.</p>
+
+* If using local stack images created with `docker save`:
+
+    ```
+    kp stack create <stack-name> -b <path to build-image>.tar -r <path to run-image>.tar
+    ```
+
+## <a id='update-stack'></a> Updating a Stack
+
+Users can update a stack using build and run images from a Docker registry or the local machine:
+
+- If using a Docker registry:
+
+    ```
+    kp stack update <stack-name> -b <build image> -r <run-image>
+    ```
+
+<p class='note'><strong>Note:</strong> The user must have read access to the source Docker registry and write access to build service registry on the local machine.</p>
+
+* If using local stack images created with `docker save`:
+
+    ```
+    kp stack update <stack-name> -b <path to build-image>.tar -r <path to run-image>.tar
+    ```
+
+## <a id='get-stack-status'></a> Retrieving a Stack Status
+
+Users can get the current status of a stack:
+
+    kp stack status <stack-name>
+
+The following is an example of the output for this command:
+
+	Status:          Ready
+    ID:             org.cloudfoundry.stacks.cflinuxfs3
+    Run Image:      paketo/run:full-cnb
+    Build Image:    paketo/build:full-cnb
+
+## <a id='kpack-resources'></a> Corresponding kpack Resource
+
+All Build Service builders utilize a cluster scoped [Stack Resource](https://github.com/pivotal/kpack/blob/master/docs/custombuilders.md#stack) with the name `build-service-stack`.

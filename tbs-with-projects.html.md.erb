@@ -1,0 +1,102 @@
+---
+title: Using Tanzu Build Service with Projects
+owner: Build Service Team
+---
+
+The following procedures describe how to manage projects and project members with build service.
+
+A `project` is a Build Service resource that simplifies kubernetes namespaces and RBAC to provide multi-tenancy for images, secrets, and builders.
+
+Projects are optional.
+
+## <a id='create-project'></a> Creating a Project
+
+To create a new project:
+
+    kubectl create -f PROJECT-YAML
+
+Where `PROJECT-YAML` is a YAML file of the form:
+
+```
+apiVersion: projects.vmware.com/v1alpha1
+kind: Project
+metadata:
+    name: my-project
+spec:
+   access:
+    - kind: User
+      name: user-1@company.org
+    - kind: User
+      name: user-2@company.org
+    - kind: Group
+      name: group-1@company.org
+    - kind: User
+      name: oidc:oidc-backed-user
+```
+
+* `name`: The name of the project and the corresponding namespace.
+* `access`: A list of subjects to grant access to.
+* `access.[kind]`: The kind of the subject, either `User` or `Group`.
+* `name`: The name the subject.
+
+<p class='note'><strong>Note:</strong> If you are utilizing oidc for identity, names may need to be prefixed with the oidc prefix.</p>
+
+To grant the current user sole ownership of the project, create a project with an empty access list. 
+For example:
+
+```
+apiVersion: projects.vmware.com/v1alpha1
+kind: Project
+metadata:
+    name: my-project
+spec:
+   access: []
+```
+
+## <a id='lizt-projects'></a> Listing Projects
+
+To view projects of which the user is a member:
+
+    kubectl create -f PROJECT-LIST-YAML
+    
+Where `PROJECT-LIST-YAML` is a YAML file of the form:
+
+```
+apiVersion: projects.vmware.com/v1alpha1
+kind: ProjectAccess
+metadata:
+    name: access-query
+```
+
+Get the status of the `ProjectAccess` resource to determine your available projects.
+
+    kubectl get projectaccess access-query -o yaml
+
+Be sure to delete the resource after checking the status.
+
+    kubectl delete projectaccess access-query
+
+## <a id='using-projects'></a> Using Projects
+
+Projects will generate namespaces with an identical name and the appropriate RBAC policies. 
+Therefore, you can use projects by targeting the corresponding namespace.
+
+<p class='note'><strong>Note:</strong> because Projects map to Kubernetes namespaces, you should not create projects with the same name as pre-existing Kubernetes namespaces.
+
+## <a id='manage-project-members'></a> Adding and Removing Project Members
+
+Any member of a project can add and remove other project members. Simply modify the project spec via `kubectl edit`, `kubectl update`, `kubectl patch`, or `kubectl apply`.
+
+### <a id='list-members'></a> Listing Members of a Project
+
+To list members of a project, simply get the status of the project resource.
+
+    kubectl get project my-project -o yaml
+
+## <a id='delete-project'></a> Deleting a Project
+
+To delete a project:
+
+    kubectl delete project my-project
+    
+Deleting a project will clean up and delete the corresponding namespace.
