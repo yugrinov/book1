@@ -2,7 +2,6 @@
 
 This repository contains content for Tanzu Build Service documentation. We publish the Tanzu Build Service documentation at
 [https://docs.pivotal.io/build-service/index.html](https://docs.pivotal.io/build-service/index.html).
-The repository for the book buil
 
 ## How To Contribute
 
@@ -21,12 +20,11 @@ the source for this page in GitHub" at the bottom of the topic.
 | **Branch Name** | **Content** | **Location** |
 |-----------------|-------------|--------------|
 | `master` | DO NOT USE | |
-| `v1.1`   | Tanzu Build Service 1.1 pre-release  | https://docs-pcf-staging.cfapps.io/build-service/1-1/ |
-| `v1.0`   | Tanzu Build Service 1.0    | https://docs.pivotal.io/build-service/1-0/ |
-
-## Where is the book repository?
-
-The  book repo associated with this content repo is [**docs-book-buildservice**](https://github.com/pivotal-cf/docs-book-buildservice).
+| `v1.0`   | Tanzu Build Service 1.0 pre-release  | https://docs-pcf-staging.cfapps.io/build-service/1-0/ |
+| `v0.2.0` | Tanzu Build Service 0.2.0  | https://docs.pivotal.io/build-service/0-2-0/ |
+| `v0.1.0` | Tanzu Build Service 0.1.0  | https://docs.pivotal.io/build-service/0-1-0/ |
+| `v0.0.4` | Tanzu Build Service 0.0.4  | https://docs.pivotal.io/build-service/0-0-4/ |
+| `v0.0.3` | Tanzu Build Service 0.0.3  | https://docs.pivotal.io/build-service/0-0-3/ |
 
 ## Continuous Integration and Continuous Delivery
 
@@ -40,4 +38,4 @@ review, the staging site is manually pushed to the production site,
 
 Concourse Pipeline:
 
-[https://runway-ci.eng.vmware.com/teams/mapbu-docs/pipelines/tanzu-build](https://runway-ci.eng.vmware.com/teams/mapbu-docs/pipelines/tanzu-build)
+[https://concourse.run.pivotal.io/teams/cf-docs/pipelines/tanzu-build/?group=build-service](https://concourse.run.pivotal.io/teams/cf-docs/pipelines/tanzu-build/?group=build-service)
