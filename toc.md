@@ -15,3 +15,4 @@
 - [Frequently Asked Questions](faq.html)
 - [Additional Resources](additional-resources.html)
 - [Release Notes](release-notes.html)
+- [Test File](push-sub-commands.html.md.erb)
