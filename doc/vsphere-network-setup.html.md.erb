@@ -1,0 +1,152 @@
+---
+title: "Setting Up vSphere Network"
+---
+
+VMware Tanzu Greenplum on Dell EMC VxRail uses the following three networks described below:
+
+1. **Internal network**
+
+    The internal network is identified by the port group `gp-virtual-internal`. It is used by Greenplum for internal communications. It requires a new VLAN ID and a number of non-routable contiguous static IP addresses that will be used for:
+    - Greenplum Database virtual machines
+    - Jumpbox virtual machine
+
+    Determine the number of required IP addresses based on the number of virtual machines in your environment. For example, for a four ESXi host configuration, it requires 67 non-routable contiguous static IP addresses.
+
+1. **External network**
+
+    The external network is identified by the port group `gp-virtual-external`. It is used by Greenplum for external traffic through the master and standby master nodes. It requires a new VLAN ID and 4 routable static IP addresses that will be used for:
+    - Greenplum Master
+    - Greenplum Standby
+    - Jumpbox Virtual Machine
+    - Greenplum Virtual Machine template
+
+1. **Load Backup and Restore network**
+
+    The load backup and restore network is identified by the port group `gp-virtual-etl-bar`. It is used by Greenplum for ETL traffic and for backup and restore traffic. It requires a new VLAN ID and a number of non-routable contiguous static IP addresses that will be used for: 
+    - Greenplum Database Virtual Machines
+    - Jumpbox Virtual Machine 
+
+    Determine the number of required IP addresses based on the number of virtual machines in your environment. For example, for a four ESXi host configuration, it requires 67 non-routable contiguous static IP addresses.
+
+    Note that ETL or backup traffic must take place within the internal network `gp-virtual-etc-bar` which is non-routable.
+
+## <a id="vds"></a>Verifying the Distributed Virtual Switch Settings
+
+Check the Distributed Virtual Switch settings to make sure that the Maximum Transmission Unit (MTU) is set to 9000 Bytes:
+
+1. On the vSphere Client Home page, click **Networking** and navigate to your distributed switch.
+1. Navigate to **Configure** -> **Properties** -> **Advanced**.
+1. Verify that **MTU** is set to **9000 Bytes**. If it is set to any other value, edit the value and set it to **9000 Bytes**, and click **OK**.
+
+## <a id="creating"></a>Creating the Distributed Port Groups
+
+The table below summarizes the distributed port groups that the Virtual Distributed Switch must have configured. Some of them might already be present in your vSphere environment.
+
+| Port Group Name                    | Description                                                                                                                                                                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| gp&#8209;virtual&#8209;internal | Used for Greenplum cluster internal communications, including interconnect, dispatch and mirroring. This network is usually air-gapped, and does not have internet connection. All IP addresses are statically assigned.                                  |
+| gp&#8209;virtual&#8209;external | Used for Greenplum cluster user connections from outside the cluster. The Greenplum master virtual machine exposes `$PGPORT` on this network. It is also used to connect to the master and standby virtual machines for DBA or troubleshooting purposes. This network usually has DHCP enabled. |
+| gp&#8209;virtual&#8209;etl&#8209;bar  | Used for ETL and backup/restore operations for the Greenplum cluster.                                                                                                                      |
+| vsphere&#8209;management   | Used by vCenter to manage the ESXi hosts. It supports the VMkernel port of management.                                                                                                                                                                         |
+| vsphere&#8209;vmotion     | Used for vSphere HA and DRS. It supports the VMkernel port of vMotion.                                                                                                                                                                                         |
+| vsphere&#8209;vsan        | Used for vSAN connections. It supports the VMkernel port of vSAN.                                                                                                                                                                                              |
+| vsphere&#8209;vcenter     | Dedicated management network, including vCenter, DHCP, DNS, and NTP services. Usually the IP addresses are statically assigned.                                                                                                                                    |
+| vsphere&#8209;vm          | Used by non Greenplum virtual machines to connect to the company network. It usually has internet connectivity. This network usually has DHCP enabled.                                                                                                     |
+
+Create the above port groups in your vSphere environment:
+
+1. On the vSphere Client Home page, click **Networking** and navigate to the distributed switch for this environment.
+1. Click on the arrow next to your distributed switch to view the list of existing port groups. Skip the creation of any port groups listed above that already exist.
+1. Right-click the distributed switch and select **Distributed port group** > **New distributed port group**.
+1. Specify the name of the new distributed port group (use the table above), then click **Next**.
+1. On the **Configure settings** page, make sure you select **VLAN** as the VLAN type, then select the appropriate VLAN ID for each port group. You should have this information provided by your network administrator.
+1. Click **Next**, confirm your settings and click **Finish**.
+
+## <a id="conf"></a>Configuring the Distributed Port Groups
+
+### <a id="principles"></a>Principles of vSphere Distributed Switch to Uplink Assignment
+
+When creating and configuring the distributed port groups listed above, you must adhere to the following principles:
+
+- Always use active/standby uplinks to optimize the performance by avoiding a single point of failure.
+- Always separate the active/standby uplinks across two different NICs and two different switches to ensure high availability.
+- The two uplinks of the active/standby pair must connect to two physical switches which must be interlinked to ensure high availability.
+- The port group `vsphere-vsan` must be always on its own active uplink.
+- The port group `gp-virtual-internal` must be always on its own active uplink.
+- The port group `gp-virtual-etl-bar` must be always on its own active uplink.
+- Multiple standby uplinks can be overlapped with the dedicate active uplink. However, there is a risk of degraded performance if the active link goes offline.
+
+Based on the principles above, and depending on your Dell EMC VxRail topology, the configuration of the port groups may vary. The next section describes the recommended topology of Dell EMC VxRail and documents how the port groups must be configured for this particular topology.
+
+### <a id="topology"></a>Using 4x25GbE Links
+
+This Dell EMC VxRail topology consists of Dell EMC VxRail nodes with two 25GbE Network Daughter Cards (NDC) ports, two 25GbE Peripheral Component Interconnect Express (PCIe) ports connected to two TOR switches, and one optional connection to management switch for Integrated Dell Remote Access Controller (iDRAC).
+You can find more information about this topology on page 109 of the [Dell EMC VxRail Network Planning Guide](https://www.delltechnologies.com/asset/en-us/products/converged-infrastructure/technical-support/h15300-vxrail-network-guide.pdf) (Figure 53).
+
+<img src="images/gp-virtual-network-4-25gbe.jpg" class="image" width="1000" alt="centered image"/>
+
+The following table shows the mapping between physical devices, port numbers, virtual device names, and physical switches:
+
+| Physical Device | Port | Virtual Device Name | Physical Switch |
+| --------------- | ---- | ------------------- | --------------- |
+| NDC             | 0    | vmnic0              | 1               |
+| NDC             | 1    | vmnic1              | 2               |
+| PCIe            | 0    | vmnic2              | 2               |
+| PCIe            | 1    | vmnic3              | 1               |
+
+<style>
+o { color: Orange }
+g { color: Green }
+</style>
+
+Configure the port groups in your vSphere environment:
+
+1. On the vSphere Client Home page, click **Networking** and navigate to your distributed switch.
+1. Right-click the distributed port and select **Edit settings**.
+1. On the **Teaming and failover** page, under **Failover order**, add the corresponding uplink.
+1. Click **OK**.
+
+You must configure the following port groups on the Virtual Distributed Switch to match the following table:
+
+| Port Group Name     | uplink1 (vmnic0) | uplink2 (vmnic1) | uplink3 (vmnic2) | uplink4 (vmnic3) |
+| ---------------     |  -------         | -------          | -------          | -------          |
+| vsphere-management  | <g>Active</g>    | Unused           | <o>Standby</o>   | Unused           |
+| vsphere-vmotion     | <o>Standby</o>   | Unused           | <g>Active</g>    | Unused           |
+| vsphere-vm          |  <o>Standby</o>  | Unused           | <g>Active</g>    | Unused           |
+| vsphere-vcenter     | <o>Standby</o>   | Unused           | <g>Active</g>    | Unused           |
+| vsphere-vsan        | Unused           | <g>Active</g>    | Unused           | <o>Standby</o>   |
+| gp-virtual-internal |  Unused          | <o>Standby</o>   | Unused           | <g>Active</g>    |
+| gp-virtual-external | <g>Active</g>    | Unused           | <o>Standby</o>   | Unused           |
+| gp-virtual-etl-bar  | <o>Standby</o>   | Unused           | <g>Active</g>    | Unused           |
+
+For example, the **Failover order**  configuration for port group `gp-virtual-internal` should look like this:
+
+<img src="images/failoverorder.png" class="image" width="400" alt="centered image"/>
+
+### <a id="vds"></a>Enabling vSphere Distributed Switch (vDS) Health Check
+
+Since the distributed switch and the physical switches are configured separately, settings such as the MTU, VLAN, and teaming settings might present configuration discrepancies.
+To help narrow down any network configuration issues, vSphere provides a vDS Health Check to detect network configuration inconsistencies between the distributed switch and physical switches.
+Please refer to the [vSphere Documentation](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.networking.doc/GUID-6D155482-0743-4252-A8DC-3F608AB3654A.html) for more details.
+
+To enable the vSphere Distributed Switch Health Check from vCenter:
+
+- Click **Menu** -> **Networking**.
+- Select your distributed switch.
+- Click **Configure** -> **Settings** -> **Health Check**.
+- Click the **Edit** button on the right pane.
+- For **VLAN and MTU**, select **Enabled** and leave **Interval** as default (1 minute).
+- For **Teaming and Failover**, select **Enabled** and leave **Interval** as default (1 minute).
+- Click **OK**.
+
+There are some known limitations of Health Check:
+
+- It does not check the LAG ports.
+- It could cause network performance degradation if you have many uplinks, VLANs and hosts.
+
+You may want to enable vDS Health Check only during deployment and testing phases, and turn it back off once you have verified that there are no configuration inconsistencies.
+
+## <a id="next"></a>Next Steps
+
+Continue configuring Dell EMC VxRail with vSphere by [Setting Up vSphere DRS and HA](vsphere-drs-ha-setup.html).
+

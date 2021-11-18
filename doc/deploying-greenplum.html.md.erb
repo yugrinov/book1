@@ -1,0 +1,117 @@
+---
+title: "Deploying Greenplum"
+---
+
+You are now ready to deploy Greenplum Database on the newly deployed cluster. Perform the steps below from the Greenplum master node.
+
+## <a id="deploying"></a>Deploying a Greenplum Database Cluster
+
+1. Initialize the Greenplum cluster.
+
+    1. Log in to the Greenplum master node as `gpadmin` user.
+
+    1. Create the Greenplum configuration script `create_gpinitsystem_config.sh` and paste the following contents:
+
+        ```
+        #!/bin/bash
+        # setup the gpinitsystem config
+        primaryArray() {
+          numOfSegments=$1
+          array=""
+          newline=$'\n'
+          for i in $(seq 1 ${numOfSegments}); do
+            array+="sdw$(($i*2-1))~sdw$(($i*2-1))~6000~/gpdata/primary/gpseg$(($i-1))~$(($i*2))~$(($i-1))${newline}"
+          done
+          echo "${array}"
+        }
+        mirrorArray() {
+          numOfSegments=$1
+          array=""
+          newline=$'\n'
+          for i in $(seq 1 ${numOfSegments}); do
+            array+="sdw$(($i*2))~sdw$(($i*2))~7000~/gpdata/mirror/gpseg$(($i-1))~$(($i*2+1))~$(($i-1))${newline}"
+          done
+          echo "${array}"
+        }
+        create_gpinitsystem_config() {
+        echo "Generate gpinitsystem"
+        cat <<EOF> ./gpinitsystem_config
+        ARRAY_NAME="Greenplum Data Platform"
+        TRUSTED_SHELL=ssh
+        CHECK_POINT_SEGMENTS=8
+        ENCODING=UNICODE
+        SEG_PREFIX=gpseg
+        HEAP_CHECKSUM=on
+        HBA_HOSTNAMES=0
+        QD_PRIMARY_ARRAY=mdw~mdw~5432~/gpdata/master/gpseg-1~1~-1
+        numTotalSegments=$1
+        declare -a PRIMARY_ARRAY=(
+        $( primaryArray $((${numTotalSegments}/2)) )
+        )
+        declare -a MIRROR_ARRAY=(
+        $( mirrorArray $((${numTotalSegments}/2)) )
+        )
+        EOF
+        }
+        numTotalSegments=$1
+        if [ -z "$numTotalSegments" ]; then
+          echo "Usage: bash create_gpinitsystem_config.sh <num_total_segments>"
+        else
+          create_gpinitsystem_config ${numTotalSegments}
+        fi
+        ```
+
+    1. Run the script to generate the configuration file for `gpinitsystem`. Replace `64` with the number of segments in your environment:
+
+        ```
+        $ bash create_gpinitsystem_config.sh 64
+        ```
+        You should now see a file called `gpinitsystem_config`.
+
+    1. Run the following command to initialize the Greenplum Database:
+
+        ```
+        $ gpinitsystem -a -I gpinitsystem_config -s smdw
+        ```
+
+1. Configure the Greenplum master and standby master environment variables, and load the master variables:
+
+    ```
+    $ echo export MASTER_DATA_DIRECTORY=/gpdata/master/gpseg-1 >> ~/.bashrc
+    $ ssh smdw 'echo export MASTER_DATA_DIRECTORY=/gpdata/master/gpseg-1 >> ~/.bashrc'
+    $ source ~/.bashrc
+    ```
+
+1. Configure the Greenplum cluster with the commands below. Note that some of the parameter values will vary, depending on your virtual machine RAM size.
+
+    ```
+    ### Interconnect Settings
+    $ gpconfig -c gp_interconnect_queue_depth -v 16 
+    $ gpconfig -c gp_interconnect_snd_queue_depth -v 16
+
+    # Since you have one segment per VM and less competing workloads per VM,
+    # you can set the memory limit for resource group higher than the default 
+    $ gpconfig -c gp_resource_group_memory_limit -v 0.85 
+
+    # This value should be 5% of the total RAM on the VM
+    $ gpconfig -c statement_mem -v 1536MB 
+
+    # This value should be set to 25% of the total RAM on the VM
+    $ gpconfig -c max_statement_mem -v 7680MB 
+
+    # This value should be set to 85% of the total RAM on the VM
+    $ gpconfig -c gp_vmem_protect_limit -v 26112
+
+    # Since you have less I/O bandwidth, you can turn this parameter on
+    $ gpconfig -c gp_workfile_compression -v on 
+    ```
+
+1. Restart the Greenplum cluster for the newly configured settings to take effect:
+
+    ```
+    $ gpstop -r
+    ```
+
+## <a id="next"></a>Next Steps
+
+Now that the Greenplum Database has been deployed, follow the steps provided in [Validating the Greenplum Installation](validating-greenplum-installation.html) to ensure Greenplum Database has been installed correctly.

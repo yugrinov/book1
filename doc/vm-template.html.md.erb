@@ -1,0 +1,717 @@
+---
+title: "Creating the Virtual Machine Template"
+---
+
+In this section, you clone a virtual machine from an existing CentOS 7 virtual machine, perform a series of configuration changes, and create a template from it. Finally, you verify that it was configured correctly by deploying a test virtual machine from the newly created template and checking its configuration.
+
+## <a id="byo-prep"></a>Preparing the Virtual Machine
+
+Create a template from an existing virtual machine. You must have a running CentOS 7 virtual machine in the datastore and cluster where you deploy the Greenplum environment.
+
+1. Log in to vCenter and navigate to **Hosts and Clusters**.
+1. Right click your existing CentOS 7 virtual machine.
+1. Select **Clone** -> **Clone to Virtual Machine**.
+1. Enter `greenplum-db-template-vm` as the virtual machine name, then click **Next**.
+1. Select your cluster, then click **Next**.
+1. Select the vSAN datastore and select **Keep existing VM storage policies** for **VM Storage Policy**, then click **Next**.
+1. Under **Select clone options**, check the boxes **Power on virtual machine after creation** and **Customize this virtual machine's hardware** and click **Next**.
+1. Under **Customize hardware**, check the number of hard disks configured for this virtual machine. If there is only one, add a second one by clicking **Add new device** -> **Hard Disk**.
+1. Edit the existing network adapter **New Network** so it connects to the `gp-virtual-external` port group.
+    1. If you are using DHCP, a new IP address will be assigned to this interface. If you are using static IP assignment, you must manually set up the IP address in a later step.
+1. Review your configuration, then click **Finish**.
+1. Once the virtual machine is powered on, launch the Web Console and log in as `root`. Check the virtual machine IP address by running `ip a`. If you are using static IP assignment, you must manually set it up:
+    1. Edit the file `/etc/sysconfig/network-scripts/ifcfg-<interface-name>`.
+    1. Enter the network information provided by your network administrator for the `gp-virtual-external` network. For example:
+
+        ```
+        BOOTPROTO=none
+        IPADDR=10.202.89.10
+        NETMASK=255.255.255.0
+        GATEWAY=10.202.89.1
+        DNS1=1.0.0.1
+        DNS2=1.1.1.1
+        ```
+
+### <a id="byo-os"></a>Performing System Configuration
+
+Configure the newly cloned virtual machine in order to support a Greenplum Database system.
+
+1. Log in to the cloned virtual machine `greenplum-db-template-vm` as user `root`.
+
+1. Verify that VMware Tools is installed. Refer to [Installing VMware Tools](jumpbox.html#vmwtools) for instructions.
+
+1. Disable the following services:
+    1. Disable SELinux by editing the `/etc/selinux/config` file.  Change the value of the `SELINUX` parameter in the configuration file as follows:
+
+        ```
+        SELINUX=disabled
+        ```
+
+    1. Check that the System Security Services Daemon (SSSD) is installed:
+
+        ```
+        $ yum list sssd | grep -i "Installed Packages"
+        ```
+
+        If the SSSD is installed, edit the SSSD configuration file and set the `selinux_provider` parameter to `none` to prevent SELinux related SSH authentication denials which could occur even if SELinux is disabled.  Edit `/etc/sssd/sssd.conf` and add the following line. If SSSD is not installed, skip this step.
+
+        ```
+        selinux_provider=none
+        ```
+
+    1. Disable the Firewall service:
+
+        ```
+        $ systemctl stop firewalld
+        $ systemctl disable firewalld
+        $ systemctl mask --now firewalld
+        ```
+
+    1. Disable the Tuned daemon:
+
+        ```
+        $ systemctl stop tuned
+        $ systemctl disable tuned
+        $ systemctl mask --now tuned
+        ```
+
+    1. Disable Chrony:
+
+        ```
+        $ systemctl stop chronyd
+        $ systemctl disable chronyd
+        $ systemctl mask --now chronyd
+        ```
+
+1. Back up the boot files:
+
+    ```
+    $ cp /etc/default/grub /etc/default/grub-backup
+    $ cp /boot/grub2/grub.cfg /boot/grub2/grub.cfg-backup
+    ```
+
+1. Add the following boot parameters:
+
+    1. Disable Transparent Huge Page (THP):
+
+        ```
+        $ grubby --update-kernel=ALL --args="transparent_hugepage=never"
+        ```
+
+    1. Add the parameter `elevator=deadline`:
+
+        ```
+        $ grubby --update-kernel=ALL --args="elevator=deadline"
+        ```
+
+1. Install and enable the `ntp` daemon:
+
+    ```
+    $ yum install -y ntp
+    $ systemctl enable ntpd
+    ```
+
+1. Configure the NTP servers:
+
+    1. Remove all unwanted servers from `/etc/ntp.conf`. For example:
+
+        ```
+        ...
+        # Use public servers from the pool.ntp.org project.
+        # Please consider joining the pool (http://www.pool.ntp.org/join.html).
+        server 0.centos.pool.ntp.org iburst
+        ...
+        ```
+
+    1. Add an entry for each server to `/etc/ntp.conf`:
+
+        ```
+        server <data center's NTP time server 1>
+        server <data center's NTP time server 2>
+        ...
+        server <data center's NTP time server N>
+        ```
+
+    1. Add the master and standby to the list of servers after datacenter NTP servers in `/etc/ntp.conf`:
+
+        ```
+        server <data center's NTP time server N>
+        ...
+        server mdw
+        server smdw
+        ```
+
+1. Configure kernel settings so the system is optimized for Greenplum Database.
+
+    1. Create the configuration file `/etc/sysctl.d/10-gpdb.conf` and paste the following kernel optimization parameters:
+
+        ```
+        kernel.msgmax = 65536
+        kernel.msgmnb = 65536
+        kernel.msgmni = 2048
+        kernel.sem = 500 2048000 200 40960
+        kernel.shmmni = 1024
+        kernel.sysrq = 1
+        net.core.netdev_max_backlog = 2000
+        net.core.rmem_max = 4194304
+        net.core.wmem_max = 4194304
+        net.core.rmem_default = 4194304
+        net.core.wmem_default = 4194304
+        net.ipv4.tcp_rmem = 4096 4224000 16777216
+        net.ipv4.tcp_wmem = 4096 4224000 16777216
+        net.core.optmem_max = 4194304
+        net.core.somaxconn = 10000
+        net.ipv4.ip_forward = 0
+        net.ipv4.tcp_congestion_control = cubic
+        net.ipv4.tcp_tw_recycle = 0
+        net.core.default_qdisc = fq_codel
+        net.ipv4.tcp_mtu_probing = 0
+        net.ipv4.conf.all.arp_filter = 1
+        net.ipv4.conf.default.accept_source_route = 0
+        net.ipv4.ip_local_port_range = 10000 65535
+        net.ipv4.tcp_max_syn_backlog = 4096
+        net.ipv4.tcp_syncookies = 1
+        vm.overcommit_memory = 2
+        vm.overcommit_ratio = 95
+        vm.swappiness = 10
+        vm.dirty_expire_centisecs = 500
+        vm.dirty_writeback_centisecs = 100
+        vm.zone_reclaim_mode = 0
+        ```
+
+    1. Add the following parameters, some of the values will depend on the virtual machine settings calculated on the [Sizing section](planning.html#sizing).
+
+        1. Determine the value of the RAM in bytes by creating the variable `$RAM_IN_BYTES`. For example, for a 30GB RAM virtual machine, run the following:
+
+            ```
+            $ RAM_IN_BYTES=`expr 30 \* 1024 \* 1024 \* 1024`
+            ```
+
+        1. Define the following parameters that depend on the variable `$RAM_IN_BYTES` that you just created, and append them to the file `/etc/sysctl.d/10-gpdb.conf` by running the following commands:
+
+            ```
+            $ echo "vm.min_free_kbytes = $(expr $RAM_IN_BYTES \* 3 / 100 / 1024)" >> /etc/sysctl.d/10-gpdb.conf
+            $ echo "kernel.shmall = $(expr $RAM_IN_BYTES / 2 / 4096)" >> /etc/sysctl.d/10-gpdb.conf
+            $ echo "kernel.shmmax = $(expr $RAM_IN_BYTES / 2)" >> /etc/sysctl.d/10-gpdb.conf
+            ```
+
+        1. If your virtual machine RAM is less than or equal to 64 GB, run the following commands:
+
+            ```
+            $ echo "vm.dirty_background_ratio = 3" >> /etc/sysctl.d/10-gpdb.conf
+            $ echo "vm.dirty_ratio = 10" >> /etc/sysctl.d/10-gpdb.conf
+            ```
+
+        1. If your virtual machine RAM is greater than 64 GB, run the following commands:
+
+            ```
+            $ echo "vm.dirty_background_ratio = 0" >> /etc/sysctl.d/10-gpdb.conf
+            $ echo "vm.dirty_ratio = 0" >> /etc/sysctl.d/10-gpdb.conf
+            $ echo "vm.dirty_background_bytes = 1610612736 # 1.5GB" >> /etc/sysctl.d/10-gpdb.conf
+            $ echo "vm.dirty_bytes = 4294967296 # 4GB" >> /etc/sysctl.d/10-gpdb.conf
+            ```
+
+1. Configure `ssh` to allow password-less login.
+
+    1. Edit `/etc/ssh/sshd_config` file and update following options:
+
+        ```
+        PasswordAuthentication yes
+        ChallengeResponseAuthentication yes
+        UsePAM yes
+        MaxStartups 100
+        MaxSessions 100
+        ```
+
+    1. Create `ssh` keys to allow passwordless login with `root` by running the following commands:
+
+        ```
+        # make sure to generate ssh keys without password. Press Enter for defaults
+        $ ssh-keygen
+        $ chmod 700 /root/.ssh
+        # copy public key to authorized_keys
+        $ cd /root/.ssh/
+        $ cat id_rsa.pub > authorized_keys
+        $ chmod 600 authorized_keys
+        # it will add host signature to known_hosts
+        $ ssh-keyscan -t rsa localhost > known_hosts
+        # duplicate host signature for all hosts in the cluster
+        $ key=$(cat known_hosts)
+        $ for i in mdw smdw $(seq -f "sdw%g" 1 64); do
+            echo ${key}| sed -e "s/localhost/${i}/" >> known_hosts
+          done
+        $ chmod 644 known_hosts
+        ```
+
+1. Configure the system resource limits to control the amount of resources used by Greenplum by creating the file `/etc/security/limits.d/20-nproc.conf`.
+
+    1. Ensure that the directory exists before creating the file:
+
+        ```
+        $ mkdir -p /etc/security/limits.d
+        ```
+
+    1. Append the following contents to the end of `/etc/security/limits.d/20-nproc.conf`:
+
+        ```
+        * soft nofile 524288
+        * hard nofile 524288
+        * soft nproc 131072
+        * hard nproc 131072
+        ```
+
+1. Create the base mount point `/gpdata` for the virtual machine data drive:
+
+    ```
+    $ mkdir -p /gpdata
+    $ mkfs.xfs /dev/sdb
+    $ mount -t xfs -o rw,noatime,nodev,inode64 /dev/sdb /gpdata/
+    $ df -kh
+    $ echo /dev/sdb /gpdata/ xfs rw,nodev,noatime,inode64 0 0 >> /etc/fstab
+    $ mkdir -p /gpdata/primary
+    $ mkdir -p /gpdata/mirror
+    $ mkdir -p /gpdata/master
+    ```
+
+1. Configure the file `/etc/rc.local` to make the following settings persistent.
+
+   1. Update the file content:
+
+        ```
+        # Configure readahead for the `/dev/sdb` to 16384 512-byte sectors, i.e. 8MiB
+        /sbin/blockdev --setra 16384 /dev/sdb
+        # Configure gp-virtual-internal network settings with MTU 9000
+        /sbin/ip link set ens192 mtu 9000
+        # Configure jumbo frame RX ring buffer to 4096
+        /sbin/ethtool --set-ring ens192 rx-jumbo 4096
+        ```
+
+    1. Make the file executable:
+
+        ```
+        $ chmod +x /etc/rc.d/rc.local
+        ```
+
+1. Create the group and user `gpadmin:gpadmin` required by the Greenplum Database.
+
+    1. Execute the following steps in order to create the user `gpadmin` in the group `gpadmin`:
+
+        ```
+        $ groupadd gpadmin
+        $ useradd -g gpadmin -m gpadmin
+        $ passwd gpadmin
+        # Enter the desired password at the prompt
+        ```
+
+    1. (Optional) Change the root password to a preferred password:
+
+        ```
+        $ passwd root
+        # Enter the desired password at the prompt
+        ```
+
+    1. Create the file `/home/gpadmin/.bashrc` for `gpadmin` with the following content:
+
+        ```
+        ### .bashrc
+
+        ### Source global definitions
+        if [ -f /etc/bashrc ]; then
+            . /etc/bashrc
+        fi
+
+        ### User specific aliases and functions
+
+        ### If Greenplum has been installed, then add Greenplum-specific commands to the path
+        if [ -f /usr/local/greenplum-db/greenplum_path.sh ]; then
+            source /usr/local/greenplum-db/greenplum_path.sh
+        fi
+        ```
+
+    1. Change the ownership of `/home/gpadmin/.bashrc` to `gpadmin:gpadmin`:
+
+        ```
+        $ chown gpadmin:gpadmin /home/gpadmin/.bashrc
+        ```
+
+    1. Change the ownership of the `/gpdata` directory to `gpadmin:gpadmin`:
+
+        ```
+        $ chown -R gpadmin:gpadmin /gpdata
+        ```
+
+    1. Create `ssh` keys for passwordless login as `gpadmin` user:
+
+        ```
+        $ su - gpadmin
+        # make sure to generate ssh keys without password. Press Enter for defaults
+        $ ssh-keygen
+        $ chmod 700 /home/gpadmin/.ssh
+        # copy public key to authorized_keys
+        $ cd /home/gpadmin/.ssh/
+        $ cat id_rsa.pub > authorized_keys
+        $ chmod 600 authorized_keys
+        # it will add host signature to known_hosts
+        $ ssh-keyscan -t rsa localhost > known_hosts
+        # duplicate host signature for all hosts in the cluster
+        $ key=$(cat known_hosts)
+        $ for i in mdw smdw $(seq -f "sdw%g" 1 64); do
+            echo ${key}| sed -e "s/localhost/${i}/" >> known_hosts
+          done
+        $ chmod 644 known_hosts
+        ```
+
+    1. Log out of `gpadmin` to go back to `root` before you proceed to the next step.
+
+1. Configure `cgroups` for Greenplum.
+
+    For security and resource management, Greenplum Database makes use of the Linux `cgroups`.
+
+    1. Install the `cgroup` configuration package:
+
+        ```
+        $ yum install -y libcgroup-tools
+        ```
+
+    1. Verify that the directory `/etc/cgconfig.d` exists:
+
+        ```
+        $ mkdir -p /etc/cgconfig.d
+        ```
+
+    1. Create the `cgroups` configuration file `/etc/cgconfig.d/10-gpdb.conf` for Greenplum:
+
+        ```
+        group gpdb {
+            perm {
+                task {
+                    uid = gpadmin;
+                    gid = gpadmin;
+                }
+                admin {
+                    uid = gpadmin;
+                    gid = gpadmin;
+                }
+            }
+            cpu {
+            }
+            cpuacct {
+            }
+            cpuset {
+            }
+            memory {
+            }
+        }
+        ```
+
+    1. Prepare the configuration file and enable `cgconfig` via `systemctl`:
+
+        ```
+        $ cgconfigparser -l /etc/cgconfig.d/10-gpdb.conf
+        $ systemctl enable cgconfig.service
+        ```
+
+1. Update the `/etc/hosts` file with all of the IP addresses and hostnames in the network `gp-virtual-internal`.
+
+    1. Verify that you have following parameters defined:
+        - Total number of segment virtual machines you wish to deploy, the default is `64`.
+        - The starting IP address of the master virtual machine in the `gp-virtual-internal` port group, the default is `250`.
+        - The leading octets for the `gp-virtual-internal` network IP range, the default is `192.168.1.`.
+
+    1. Run the following commands, replacing the values based on your environment:
+
+      ```
+      $ echo '192.168.1.250 mdw' >> /etc/hosts
+      $ echo '192.168.1.251 smdw' >> /etc/hosts
+      $ for i in {1..64}; do
+          echo  "192.168.1.${i} sdw${i}" >> /etc/hosts
+        done
+      ```
+
+1. Create two files `hosts-all` and `hosts-segments` under `/home/gpadmin`. Replace `64` with your number of segment virtual machines if applicable:
+
+    ```
+    $ echo mdw > /home/gpadmin/hosts-all
+    $ echo smdw >> /home/gpadmin/hosts-all
+    $ > /home/gpadmin/hosts-segments
+    $ for i in {1..64}; do
+        echo  "sdw${i}" >> /home/gpadmin/hosts-all
+        echo  "sdw${i}" >> /home/gpadmin/hosts-segments
+      done
+    $ chown gpadmin:gpadmin /home/gpadmin/hosts*
+    ```
+
+### <a id="byo-install"></a>Installing the Greenplum Database Software
+
+1. Download the latest version of the Greenplum Database Server 6 for RHEL 7 from [VMware Tanzu Network](https://network.tanzu.vmware.com/products/pivotal-gpdb).
+
+1. Move the downloaded binary in to the virtual machine and install Greenplum:
+
+    ```
+    $ scp greenplum-db-6.*.rpm root@greenplum-db-template-vm:/tmp
+    $ ssh root@greenplum-db-template-vm
+    $ yum install -y /tmp/greenplum-db-6.*.rpm
+    ```
+
+1. Install the following `yum` packages for better supportability:
+    - `dstat` to monitor system statistics, like network and I/O performance.
+    - `sos` to generate an sosreport, a best practice to collect system information for support purposes.
+    - `tree` to visualize folder structure.
+    - `wget` to easily get artifacts from the Internet.
+
+    ```
+    $ yum install -y dstat
+    $ yum install -y sos
+    $ yum install -y tree
+    $ yum install -y wget
+    ```
+
+### <a id="byo-template"></a>Creating the Greenplum Template
+
+Clone the newly created and configured virtual machine to a template; all the virtual machines in the Greenplum Database cluster will be created from this template.
+
+1. Log in to vCenter and navigate to **Hosts and Clusters**.
+1. Right click the **greenplum-db-template-vm** virtual machine.
+1. Select **Clone** -> **Clone to template**.
+1. Enter the template name as `greenplum-db-template`, then click **Next**.
+1. Select your cluster, then click **Next**.
+1. Select the vSAN datastore and the appropriate **VM Storage Policy** that you configured on [Setting Up vSphere Storage](vsphere-storage-setup.html) or [Setting Up vSphere Encryption](encryption.html), then click **Next**.
+1. Review your configuration, then click **Finish**.
+
+### <a id="byo-validate"></a>Validating the Template
+
+Validate that the newly created template is configured correctly by creating a test virtual machine from the template, and verify that all settings are configured correctly.
+
+#### <a id="byo-createtest"></a>Creating a Test Virtual Machine
+
+1. Log in to vCenter and navigate to **VMs and Templates**.
+1. Right-click the Greenplum template `greenplum-db-template` and select **New VM from this Template**.
+1. Enter a name for the virtual machine and click **Next**.
+1. Select your cluster, then click **Next**.
+1. Select the vSAN datastore and select **Keep existing VM storage policies** for **VM Storage Policy**, then click **Next**.
+1. Select **Power on virtual machine after creation**, then click **Next**.
+1. Review your configuration, then click **Finish**.
+
+#### <a id="byo-check"></a>Verifying the Test Virtual Machine Settings
+
+1. Log in to the virtual machine as `root`.
+1. Verify that the following services are disabled:
+    1. SELinux
+
+        ```
+        $ sestatus
+        SELinux status:                 disabled
+        ```
+
+    1. Firewall
+
+        ```
+        $ systemctl status firewalld
+        firewalld.service
+        Loaded: masked (/dev/null; bad)
+        Active: inactive (dead)
+        ```
+    1. Tune
+
+        ```
+        $ systemctl status tuned
+        tuned.service
+        Loaded: masked (/dev/null; bad)
+        Active: inactive (dead)
+        ```
+    1. Chrony
+
+        ```
+        $ systemctl status chronyd
+        chronyd.service
+        Loaded: masked (/dev/null; bad)
+        Active: inactive (dead)
+        ```
+
+1. Verify that `ntpd` is installed and enabled:
+
+    ```
+    $ systemctl status ntpd
+    ntpd.service - Network Time Service
+        Loaded: loaded (/usr/lib/systemd/system/ntpd.service; enabled; vendor preset: disabled)
+        Active: active (running) since Tue 2021-05-04 18:47:25 EDT; 4s ago
+    ```
+
+1. Verify that the NTP servers are configured correctly and the remote servers are ordered properly:
+
+    ```
+    $ ntpq -pn
+
+         remote           refid         st t when poll reach   delay   offset  jitter
+    =================================================================================
+    -xx.xxx.xxx.xxx   xx.xxx.xxx.xxx     3 u  246  256  377    0.186    2.700   0.993
+    +xx.xxx.xxx.xxx   xx.xxx.xxx.xxx     3 u  223  256  377   26.508    0.247   0.397
+    ```
+
+1. Verify that the filesystem configuration is correct:
+
+    ```
+    $ lsblk /dev/sdb
+    NAME MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+    sdb    8:16   0  250G  0 disk /gpdata/
+
+    $ grep sdb /etc/fstab
+    /dev/sdb /gpdata/ xfs rw,nodev,noatime,inode64 0 0
+
+    $ df -Th | grep sdb
+    /dev/sdb                xfs       250G  167M  250G   1% /gpdata
+
+    $ ls -l /gpdata
+    total 0
+    drwxrwxr-x 2 gpadmin gpadmin 6 Jun 10 15:20 master
+    drwxrwxr-x 2 gpadmin gpadmin 6 Jun 10 15:20 mirror
+    drwxrwxr-x 2 gpadmin gpadmin 6 Jun 10 15:20 primary
+    ```
+
+1. Verify that the parameters `transparent_hugepage=never` and `elevator=deadline` exist:
+
+    ```
+    $ cat /proc/cmdline
+    BOOT_IMAGE=/vmlinuz-3.10.0-1160.el7.x86_64 root=/dev/mapper/centos-root ro crashkernel=auto spectre_v2=retpoline rd.lvm.lv=centos/root rd.lvm.lv=centos/swap rhgb quiet LANG=en_US.UTF-8 transparent_hugepage=never elevator=deadline
+    ```
+
+1. Verify that the `ulimit` settings match your specification by running the following command:
+
+    ```
+    $ ulimit -a
+    core file size          (blocks, -c) 0
+    data seg size           (kbytes, -d) unlimited
+    scheduling priority             (-e) 0
+    file size               (blocks, -f) unlimited
+    pending signals                 (-i) 119889
+    max locked memory       (kbytes, -l) 64
+    max memory size         (kbytes, -m) unlimited
+    open files                      (-n) 524288
+    pipe size            (512 bytes, -p) 8
+    POSIX message queues     (bytes, -q) 819200
+    real-time priority              (-r) 0
+    stack size              (kbytes, -s) 8192
+    cpu time               (seconds, -t) unlimited
+    max user processes              (-u) 131072
+    virtual memory          (kbytes, -v) unlimited
+    file locks                      (-x) unlimited
+    ```
+
+1. Verify that the necessary `yum` packages are installed, by running `rpm -qa`:
+
+    ```
+    $ rpm -qa | grep apr
+    $ rpm -qa | grep apr-util
+    $ rpm -qa | grep dstat
+    $ rpm -qa | grep greenplum-db-6
+    $ rpm -qa | grep krb5-devel
+    $ rpm -qa | grep libcgroup-tools
+    $ rpm -qa | grep libevent
+    $ rpm -qa | grep libyaml
+    $ rpm -qa | grep net-tools
+    $ rpm -qa | grep ntp
+    $ rpm -qa | grep perl
+    $ rpm -qa | grep rsync
+    $ rpm -qa | grep sos
+    $ rpm -qa | grep tree
+    $ rpm -qa | grep wget
+    $ rpm -qa | grep which
+    $ rpm -qa | grep zip
+    ```
+
+1. Verify that you configured the Greenplum Database `cgroups` correctly by running the commands below.
+
+    1. Identify the `cgroup` directory mount point:
+
+        ```
+        $ grep cgroup /proc/mounts
+        ```
+
+        The first line from the above output identifies the `cgroup` mount point. For example, `/sys/fs/cgroup`.
+
+    1. Run the following commands, replacing `<cgroup_mount_point>` with the mount point which you identified in the previous step:
+
+        ```
+        $ ls -l <cgroup_mount_point>/cpu/gpdb
+        $ ls -l <cgroup_mount_point>/cpuacct/gpdb
+        $ ls -l <cgroup_mount_point>/cpuset/gpdb
+        $ ls -l <cgroup_mount_point>/memory/gpdb
+        ```
+
+        The above directories must exist and must be owned by `gpadmin:gpadmin`.
+
+    1. Verify that the `cgconfig` service is running by executing the following command:
+
+        ```
+        $ systemctl status cgconfig.service
+        ```
+
+1. Verify that the `sysctl` settings have been applied correctly based on your virtual machine settings.
+
+    1. First define the variable `$RAM_IN_BYTES` again on this virtual machine. For example, for a 30 GB RAM:
+
+        ```
+        $ RAM_IN_BYTES=`expr 30 \* 1024 \* 1024 \* 1024`
+        ```
+
+    1. Retrieve the values listed below by running `sysctl <kernel setting>` and confirm that the values match the verifier specified for each setting.
+
+        | Kernel Setting | Value |
+        | -------------- | ------------------------ |
+        | vm.min_free_kbytes | expr $RAM_IN_BYTES \* 3 / 100 / 1024 |
+        | vm.overcommit_memory | 2 |
+        | vm.overcommit_ratio | 95 |
+        | net.ipv4.ip_local_port_range | 10000 65535 |
+        | kernel.shmall | expr $RAM_IN_BYTES / 2 / 4096 |
+        | kernel.shmmax | expr $RAM_IN_BYTES / 2 |
+
+    1. For a virtual machine with 64 GB of RAM or less:
+
+        | Kernel Setting | Value |
+        | -------------- | ------------------------ |
+        | vm.dirty_background_ratio | 3 |
+        | vm.dirty_ratio | 10 |
+
+    1. For a virtual machine with more than 64 GB of RAM:
+
+        | Kernel Setting | Value |
+        | -------------- | ------------------------ |
+        | vm.dirty_background_ratio | 0 |
+        | vm.dirty_ratio | 0 |
+        | vm.dirty_background_bytes | 1610612736 |
+        | vm.dirty_bytes | 4294967296 |
+
+1. Verify that `ssh` command allows passwordless login as `gpadmin` user without prompting for a password:
+
+    ```
+    $ su - gpadmin
+    $ ssh localhost
+    $ exit
+    $ exit
+    ```
+
+1. Verify the readahead value:
+
+    ```
+    $ /sbin/blockdev --getra /dev/sdb
+    16384
+    ```
+
+1. Verify the RX Jumbo buffer ring setting:
+
+    ```
+    $ /sbin/ethtool -g ens192 | grep Jumbo
+    RX Jumbo: 4096
+    RX Jumbo: 4096
+    ```
+
+1. Verify the MTU size:
+
+    ```
+    $ /sbin/ip a | grep 9000
+    2: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc mq state UP group default qlen 1000
+    ```
+
+## <a id="next"></a>Next Steps
+
+Now that you have a virtual machine template ready, follow the steps provided in [Allocating the Virtual Machines with Terraform](allocating-vms.html) to generate all the necessary virtual machines for your Greenplum Database cluster using Terraform from the jumpbox virtual machine.

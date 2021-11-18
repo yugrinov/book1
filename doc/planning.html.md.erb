@@ -1,0 +1,140 @@
+---
+title: "Planning Dell EMC VxRail with Greenplum"
+---
+
+This topic provides guidance on how to size your vSphere environment based on the total size of your Greenplum Database. Criteria such as the RAID type, number of deployed virtual machines, and total amount of available resources required will vary depending on the database size.
+
+The minimum size for the proposed configuration is 4 ESXi nodes, which translates into a Greenplum Database with 64.12 TB of usable storage when no compression is being used. The maximum size is 16 ESXi hosts, which results in 397.32 TB of uncompressed usable storage for the database.
+
+## <a id="database"></a>Calculating the Greenplum Database Size and ESXi Hosts
+
+Determine the number of ESXi hosts you need based on your Greenplum database requirements.
+The table below shows the number of hosts are required based on the size of the Greenplum database.
+
+| ESXi Hosts | Usable Storage (TB) (No Compression) | Raw Storage (TB) |
+| -------------- | -------------------- | --------- | 
+| 4 | 64.12 | 512 | 
+| 5 | 122.04 | 640 |
+| 6 | 147.05 | 768 |
+| 7 | 172.07 | 896 | 
+| 8 | 197.09 | 1024 | 
+| 9 | 222.11 | 1152 | 
+| 10 | 247.13 | 1280 | 
+| 11 | 272.15 | 1408 |
+| 12 | 297.18 | 1536 | 
+| 13 | 322.20 | 1664 | 
+| 14 | 347.22 | 1792 | 
+| 15 | 372.25 | 1920 | 
+| 16 | 397.32 | 2048 | 
+
+Usable storage is the total size of user data after applying the associated storage overhead; this is mainly needed by the vSAN storage policy (it requires 30% reservation) and the RAID configuration. It is also used for temporary data reservation, high availability (HA) reservation, and free spaces.
+
+## <a id="raid"></a>Determining the RAID Type 
+
+The following table provides recommendations to consider when choosing between the RAID1 (mirroring) and RAID5 (erasure coding) for the vSphere storage policies that you configure in a later step.
+Note that these parameters have been calculated to ensure Greenplum fault tolerance against host failure.
+
+| RAID Type | ESXi Hosts | Space Overhead | Performance | Recovery Behavior |
+| ---- | ---------------------- | -------------- | ----------- | ----------------- |
+| RAID1 (mirroring) | 4 | 2x | WRITE 1.5 GiB/s per ESXi host<br> READ 3 GiB/s per ESXi host | In case of disk failure, a 250 GB `vmdk` requires <br>reading 250 GB of data to rebuild |
+| RAID5 <br>(erasure coding) | 5 or more | 1.33x | WRITE 1 GiB/s per ESXi host<br> READ 3 GiB/s per ESXi host | In case of disk failure, a 250 GB `vmdk` requires <br>reading 750 GB of data to rebuild |
+
+## <a id="vms"></a>Determining the Number of Virtual Machines 
+
+The number of Greenplum Database virtual machines you deploy depends on the number of hosts in your environment.
+You must plan for 8 primary segments and 8 mirror segments running on each ESXi host, as well as the Greenplum master and standby master virtual machines.
+
+```
+total_number_of_greenplum_vms = 16 * (number_of_hosts) + 2
+```
+
+Note that the maximum number of Greenplum virtual machines that can be deployed in a VMware Tanzu Greenplum on Dell EMC VxRail environment is 250.
+
+For example, in a configuration of four ESXi hosts, you deploy a total of 66 Greenplum virtual machines: 
+
+- one master virtual machine
+- one master standby virtual machine
+- 32 primary segment virtual machines
+- 32 mirror segment virtual machines
+
+The following table calculates the number of necessary Greenplum virtual machines depending on the number of ESXi hosts:
+
+| Number of ESXi Hosts &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Total Number of Greenplum Virtual Machines |
+| ---------- | ----------------------------- |
+| 4 | 66 |
+| 5 | 82 |
+| 6 | 98 |
+| 7 | 114 |
+| 8 | 130 |
+| 9 | 146 |
+| 10 | 162 |
+| 11 | 178 |
+| 12 | 194 |
+| 13 | 210 |
+| 14 | 226 |
+| 15 | 242 |
+| 16 | 250<sup>1</sup> |
+
+<sup>1</sup>&nbsp;Affected by the limitation of a maximum of 250 Greenplum virtual machines.
+
+**Note**: you will additionally deploy a [jumpbox virtual machine](jumpbox.html) which you will use to allocate the virtual machines.
+You must take it into account when allocating IP addresses in the [Prerequisites](prerequisites.html#network) topic.
+
+## <a id="sizing"></a>Sizing the Greenplum Virtual Machine
+
+The virtual machines running the Greenplum Database software must be correctly sized to handle the database workloads depending on the cluster specifications.
+
+All virtual machines must be configured with the following resources regardless of the environment:
+
+| vCPUs | RAM (GB) | Root Volume (GB) |
+| ----- | -------- | ---------------- |
+| 8     | 30       | 50               |
+
+The following table displays the required Data volume size per virtual machine depending on the number of ESXi hosts.
+The provided values ensure that there is sufficient capacity left in the cluster if a host fails. Note that the storage policies are configured with thick provisioning.
+
+| ESXi Hosts | Data Volume (GB) |
+| ----- | ------ |
+| 4  | 2500 | 
+| 5 or more  | 4000 | 
+
+## <a id="sumup"></a>Putting it all together
+
+You must ensure that your VMware Tanzu Greenplum on Dell EMC VxRail environment has enough resources to accommodate the usable space required, the choice of RAID, the number of virtual machines required, the resources needed for each virtual machine, high availability to allow for component failures, and optimal performance.
+
+| ESXi Hosts | Usable Storage (TB) | Storage Policy | Virtual Machines | Total Primary Segment vCPUs | Total Primary Segment RAM (GB) |
+| -------------- | ---------- | ----------- | --- | ----------- | --------- |
+| 4  | 64.12  | RAID1 | 66  | 256 |   960 |
+| 5  | 122.04 | RAID5 | 82  | 320 | 1,200 |
+| 6  | 147.05 | RAID5 | 98  | 384 | 1,440 |
+| 7  | 172.07 | RAID5 | 114 | 448 | 1,680 |
+| 8  | 197.09 | RAID5 | 130 | 512 | 1,920 |
+| 9  | 222.11 | RAID5 | 146 | 576 | 2,160 |
+| 10 | 247.13 | RAID5 | 162 | 640 | 2,400 |
+| 11 | 272.15 | RAID5 | 178 | 704 | 2,640 |
+| 12 | 297.18 | RAID5 | 194 | 768 | 2,880 |
+| 13 | 322.20 | RAID5 | 210 | 832 | 3,120 |
+| 14 | 347.22 | RAID5 | 226 | 896 | 3,360 |
+| 15 | 372.25 | RAID5 | 242 | 960 | 3,600 |
+| 16 | 397.32 | RAID5 | 250 | 992 | 3,720 |
+
+## <a id="vxrail"></a>Dell EMC VxRail Reference Architecture
+
+This reference architecture uses Dell EMC VxRail version 7.0.200. See more details on page 22 of the [Dell EMC VxRail Documentation](https://dl.dell.com/content/docu97739_VxRail_7.0.x_Support_Matrix.pdf?laguage=en_US).
+
+| Description      | Configuration                                                   |
+| -----------      | -------------                                                   |
+| Model            | P570F                                                           |
+| CPU              | Intel(R) Xeon(R) Gold 6248R CPU @ 3.00 GHz                       |
+| Logical Cores    | 96 (HyperThreaded)                                              |
+| NICs             | 4x 25 Gbps duplex                                                |
+| Physical Cores   | 48                                                              |
+| RAM              | 768 GB                                                           |
+| Cache Storage    | 4x Dell Express Flash NVMe ColdStream P4800x 750 GB PCIe U.2 SSD |
+| Capacity Storage | 20x Dell Express Flash NVMe PM1725B (MU) 6.4 TB PCIe U.2 SSD     |
+
+There are 4 vSAN disk groups, each of them composed of one cached drive and 5 capacity drives.
+
+## <a id="next"></a>Next Steps
+
+Once you have confirmed your version and model of Dell EMC VxRail, the number of EXSi hosts based on your Greenplum Database capacity, and calculated the number of virtual machines and the necessary available resources in your vSphere environment, proceed to [Prerequisites](prerequisites.html) to prepare for the installation.

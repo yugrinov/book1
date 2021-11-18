@@ -1,0 +1,195 @@
+---
+title: "Managing Single Host Failures in Dell EMC VxRail"
+---
+
+This section describes the possible scenarios of a single ESXi host failure and how vSphere's DRS and HA features ensure automatic failover of virtual machines to other running ESXi hosts.
+
+##  <a id="drsha"></a>How DRS and HA protect a running Greenplum cluster
+
+In the VMware Tanzu Greenplum on Dell EMC VxRail deployment there is a one-to-one mapping between the Greenplum segments and the virtual machines that are hosting the segments. This means that each virtual machine is only hosting one instance of a Greenplum segment: primary or mirror.
+
+Given the virtual machine host name, you can determine which segment is running in it, as well as what virtual machines are in a primary/mirror pair for a given content id.
+
+For a 66 virtual machine deployment, 64 of them are segments named `sdw1` to `swd64`. There is also the master, `mdw`, and a standby master `smdw`.
+
+Use the formula below to compute the content id for each segment. It uses the host name index from the virtual machines: for example, for `sdw1` the index is 1.
+
+```
+content_id = floor((hostname_index - 1) / 2)
+```
+
+By applying the formula above, the virtual machines `sdw1` and `sdw2` map to content ID 0, while `sdw3` and `sdw4` map to content ID 1, and so on.
+
+The index number lets you determine whether a virtual machine hosts the primary or the mirror for that content: an odd index is created as a primary, and an even index is created as a mirror. Note that the roles may change when a failover happens (see [Best Practices](#best-practices) for more details).
+
+During deployment, Terraform created DRS Anti-Affinity rules to ensure that two virtual machines with the same content id never run on the same ESXi host.
+
+When an ESXi host hosting a primary virtual machines fails, Greenplum always fails over to its corresponding mirror that is safely running on another host.
+
+In the section [Setting Up vSphere HA and DRS](vsphere-drs-ha-setup.html), you enabled vSphere HA with the following options:
+
+- Host Failure Response/Failure Resource: **Restart VMs**
+- Admission Control/Host failures cluster tolerates: **1**
+
+As a result, vSphere HA is configured to tolerate the failure of a single host. This configuration signals the vSphere cluster to reserve the necessary resources, such as CPU and memory, in order to accommodate all the virtual machines that were running on the failed host. For example, for a vSphere cluster with 4 hosts, 25% of resources are reserved.
+
+##  <a id="hostfailure"></a>Single Host Failure Scenarios
+
+When an ESXi host goes down, vSphere HA will restart the virtual machines that were running on it on other ESXi hosts. There are 4 different scenarios:
+
+- [Mirror Segment Failure](#mirror)
+- [Primary Segment Failure](#primary)
+- [Standby Master Failure](#standby)
+- [Master Failure](#master)
+
+Note that since multiple virtual machines run on the same ESXi host, you will encounter more than one of these scenarios during a single host outage. However, you will never experience standby master and master failure for the same host.
+
+###  <a id="mirror"></a>Mirror Segment Failure
+
+In this scenario, you will not notice when a mirror segment goes down.
+It is still possible to perform database operations such as query a table, load data into a table, or create more tables. The detection of a mirror going down can take up to 2 minutes (see [Grace Period](#grace-period) for details).
+
+However, Greenplum high availability is affected because the mirror cannot replicate the work of the primary.
+
+You can query the `gp_segment_configuration` table and obtain similar information:
+
+```
+gpadmin=# SELECT * FROM gp_segment_configuration WHERE status = 'd' AND role = 'm';
+ dbid | content | role | preferred_role | mode | status | port | hostname | address | datadir
+------+---------+------+----------------+------+--------+------+----------+---------+--------------------------------
+    3 |       0 |    m |              m |    n |      d | 7000 | sdw2     |    sdw2 | /gpdata/primary/gpseg0
+```
+
+The failed mirror virtual machine will be automatically restarted on another host by vSphere HA.
+You may run `gprecoverseg` from the Greenplum master and the mirror segment will be brought back up.
+
+###  <a id="primary"></a>Primary Segment Failure
+
+In this scenario, when a primary segment goes down, all queries running on that segment will be cancelled. You will observe the following error message when trying to run a query:
+
+```
+gpadmin=# SELECT COUNT(DISTINCT c) FROM t t1;
+ERROR:  FTS detected connection lost during dispatch to seg0 slice1 192.168.11.1:6000 pid=3259:
+```
+
+The Greenplum Fault Tolerance Server (FTS) process will detect the primary segment failing and the failover to its mirror will commence. You will see the role switch on `gp_segment_configuration` table:
+
+```
+gpadmin=# SELECT * FROM gp_segment_configuration WHERE content = 0;
+ dbid | content | role | preferred_role | mode | status | port | hostname | address |                     datadir
+------+---------+------+----------------+------+--------+------+----------+---------+--------------------------------------------------
+    2 |       0 | m    | p              | n    | d      | 6000 | sdw1     | sdw1    | /gpdata
+    3 |       0 | p    | m              | n    | u      | 7000 | sdw2     | sdw2    | /gpdata
+(2 rows)
+```
+
+The original primary segment will be marked as a mirror and its status will be marked as down.
+
+The original mirror segment will be promoted to be the new primary and, when retrying the failed query above, it will finish successfully:
+
+```
+gpadmin=# SELECT count(DISTINCT c) FROM t t1;
+ count
+-------
+   101
+(1 row)
+```
+
+The failed primary virtual machine will be automatically restarted by vSphere HA on another host. You may now log in to the Greenplum master virtual machine and run `gprecoverseg`, similar to the step above, to bring back the downed mirror.
+
+###  <a id="standby"></a>Standby Master Failure
+
+When the standby master goes down, the only feature affected by this failure is the reduced availability of the master. Once the standby master has been recovered, it will catch up with the catalog changes on the master.
+
+Before the standby master failure, the `gp_segment_configuration` table would show the following:
+
+```
+gpadmin=# SELECT * FROM gp_segment_configuration WHERE content = -1;
+ dbid | content | role | preferred_role | mode | status | port | hostname | address |                     datadir
+------+---------+------+----------------+------+--------+------+----------+---------+--------------------------------------------------
+    1 |      -1 | p    | p              | n    | u      | 5432 | mdw      | mdw     | /gpdata
+   66 |      -1 | m    | m              | s    | u      | 5432 | smdw     | smdw    | /gpdata
+(2 rows)
+```
+
+The above table does not reflect state of the standby master. You must query the `pg_stat_replication` table in order to check the status of the standby master.
+If the replication process `gp_walreceiver` is running, it means that the standby master is up.
+
+```
+gpadmin=# SELECT usename, application_name, client_addr FROM pg_stat_replication;
+ usename | application_name |  client_addr
+---------+------------------+----------------
+ gpadmin | gp_walreceiver   | 192.168.11.251
+(1 row)
+```
+
+When the standby master is down, the output of `gpstate` will return output similar to the following:
+
+```
+[gpadmin@mdw ~]$ gpstate
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-Greenplum instance status summary
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-----------------------------------------------------
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Master instance                                           = Active
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Master standby                                            = smdw
+<Date-Time> gpstate:mdw:gpadmin-[WARNING]:-Standby master state                                      = Standby host DOWN   <<<<<<<<
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Total segment instance count from metadata                = 64
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-----------------------------------------------------
+```
+
+If the standby master virtual machine goes down, vSphere HA will automatically restart it on another host.
+
+You must run `gpinitstandby -n` from the Greenplum master to bring the standby master back up.
+
+```
+[gpadmin@mdw ~]$ gpinitstandby -n
+<Date-Time>  gpinitstandby:mdw:gpadmin-[INFO]:-Starting standby master
+<Date-Time>  gpinitstandby:mdw:gpadmin-[INFO]:-Checking if standby master is running on host: smdw  in directory: /gpdata
+<Date-Time>  gpinitstandby:mdw:gpadmin-[INFO]:-Successfully started standby master
+```
+
+You may verify that the standby master is up and running by running `gpstate`:
+
+```
+[gpadmin@mdw ~]$ gpstate
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-Greenplum instance status summary
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-----------------------------------------------------
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Master instance                                           = Active
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Master standby                                            = smdw
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Standby master state                                      = Standby host passive
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-   Total segment instance count from metadata                = 64
+<Date-Time> gpstate:mdw:gpadmin-[INFO]:-----------------------------------------------------
+```
+
+###  <a id="master"></a>Master Failure
+
+If the Greenplum master goes down, you will lose connection to the entire Greenplum cluster. This is a highly disruptive experience because all client connections will be dropped.
+
+vSphere HA will automatically restart the failed master virtual machine on another host. Once the virtual machine has been restarted, you must run `gpstart` to restart the cluster.
+
+Note that this scenario assumes that Greenplum master virtual machine comes back up without issues when starting it on a different host. In the event of Greenplum master corruption, see [Recovering a Failed Master](https://gpdb.docs.pivotal.io/latest/admin_guide/highavail/topics/g-recovering-a-failed-master.html) in order to activate the standby master.
+
+##  <a id="post"></a>After Host Recovery
+
+When a failed ESXi host comes back up, because the failed virtual machines have already been restarted on other running hosts by vSphere HA, vSphere DRS will rearrange the virtual machines, not necessarily the ones that went down, to balance the load of all the ESXi hosts. This operation is done through vSphere vMotion, which is transparent to the running virtual machines.
+
+There is no need for an explicit rebalancing operation because the virtual machines are all identical by design, primaries and mirrors. Service disruption occurs only once during host failure, and only in the case of a primary or master failure.
+
+##  <a id="best-practices"></a>Best Practices for Greenplum HA
+
+In most cases, running `gprecoverseg` will recover the failed segments with no issues when the affected virtual machine is restarted by vSphere HA on a different ESXi host. VMware recommends you monitor the status of the cluster in order to run `gprecoverseg` when required. Refer to [Monitoring tasks](https://gpdb.docs.pivotal.io/latest/admin_guide/managing/monitor.html) from the Greenplum Administrator Guide. Alternatively, you may use [Greenplum Command Center](https://gpcc.docs.pivotal.io/latest/topics/ui/alerts.html) to set up alerts.
+
+After a segment recovery, segment instances may not be returned to the preferred role that they were given at system initialization time. This will have no effect on the performance for a Greenplum on Dell EMC VxRail configuration.
+
+However, you may want to maintain consistency between the virtual machine host names and their preferred role (odd numbers for primaries, even numbers for mirrors) for monitoring purposes. Consider running `gprecoverseg -r` periodically to rebalance segment roles after segment failures. Note that queries in progress will be canceled and rolled back, so you may want to schedule this operation during a maintenance window.
+
+## <a id="grace-period"></a>Appendix: Grace Period for a Downed Segment
+
+There are two Greenplum configuration parameters that control the detection of a downed mirror:
+
+- `gp_fts_mark_mirror_down_grace_period` controls the waiting time between primary and its mirror. The default value is 30 seconds.
+- `gp_fts_probe_interval` controls the FTS probe interval from the master to the primaries. The default value is 60 seconds.
+
+Combining the values of both parameters, it will take up to two minutes to detect a mirror segment going down.
+
+**Note**: If both the primary and mirror virtual machines with the same content id are restarted during that period, Greenplum database  will hit a double fault, during which it is no longer able to process queries.
+In this case, the only way to bring the cluster back online is to restart the entire Greenplum cluster using `gpstop -r`.

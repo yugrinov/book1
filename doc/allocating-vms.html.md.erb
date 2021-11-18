@@ -1,0 +1,546 @@
+---
+title: "Allocating the Virtual Machines with Terraform"
+---
+<script>
+function CopyToClipboard(id)
+{
+var r = document.createRange();
+r.selectNode(document.getElementById(id));
+window.getSelection().removeAllRanges();
+window.getSelection().addRange(r);
+document.execCommand('copy');
+window.getSelection().removeAllRanges();
+}
+</script>
+
+## <a id="provision"></a>Provisioning the Virtual Machines
+
+Use the Terraform software you installed in [Creating the Jumpbox Virtual Machine](jumpbox.html#terraform) to generate copies of the template virtual machine you just created, you will configure them based on the number of virtual machines in your environment, IP address ranges, and other settings you specify in the installation script.
+
+1. Log in to the jumpbox virtual machine as `root`.
+1. Create the Terraform script file `main.tf` and copy the contents from the template below.
+
+    <pre style="height:200px;"><code id="command1">##########################################
+    # terraform variables
+    # Please customize based on customer needs
+    ##########################################
+    variable "vsphere_user" {
+      default = "greenplum@vsphere.local"
+    }
+    variable "vsphere_password" {
+      default = "DeleteMe123!"
+    }
+    variable "vsphere_server" {
+      default = "IP.of.the.vCenter"
+    }
+    variable "vsphere_datacenter" {
+      default = "name of the data center"
+    }
+    variable "vsphere_compute_cluster" {
+      default = "name of the compute cluster"
+    }
+    variable "vsphere_datastore" {
+      default = "name of vSAN datastore"
+    }
+
+    variable "vsphere_storage_policy" {
+      description = "Enter the custom name for your storage policy defined during Setting Up vSphere Storage/Encryption"
+      default = "vSAN Greenplum FTT1 RAID1 Stripe1 Thick No Encryption"
+    }
+    variable "vm_template_name" {
+      description = "VM template with vmware-tools and Greenplum installed"
+      default = "greenplum-db-template"
+    }
+    variable "greenplum_instance_id" {
+      description = "A unique identifier for this Greenplum instance"
+      default = 1
+    }
+
+    variable "resource_pool_name" {
+      description= "The name of a dedicated resource pool for Greenplum VMs which will be created by Terraform"
+      default = "greenplum"
+    }
+
+    variable "number_of_segment_vms" {
+      type = number
+
+      description = "The total number of segments VMs. This will be split in half for both primary and mirror VMs."
+      default = 64
+
+      validation {
+        condition = (
+          var.number_of_segment_vms >= 2 &&
+          var.number_of_segment_vms <= 248 &&
+          var.number_of_segment_vms % 2 == 0
+        )
+        error_message = "The number of segment hosts must be an even number between 2 and 248."
+      }
+    }
+
+    variable "gp_virtual_external_network" {
+      default = "gp-virtual-external"
+    }
+    variable "gp_virtual_internal_network" {
+      default = "gp-virtual-internal"
+    }
+    variable "gp_virtual_etl_bar_network" {
+      default = "gp-virtual-etl-bar"
+    }
+
+    # gp-virtual-external network settings
+    variable "gp_virtual_external_ipv4_prefix" {
+      type = string
+      description = "The leading octets for the routable IP range, e.g. '10.0.0.'"
+      default = "10.0.0."
+    }
+    variable "gp_virtual_external_ipv4_netmask" {
+      description = "Netmask bitcount, e.g. 24"
+      default = 24
+    }
+    variable "master_gp_virtual_external_ipv4_offset" {
+      description = "The starting IP of the routable IP range"
+      default = 10
+    }
+    variable "gp_virtual_external_gateway" {
+      description = "Gateway for the gp-virtual-external network, e.g. 10.0.0.1"
+      default = "10.0.0.1"
+    }
+    variable "dns_servers" {
+      type = list(string)
+      description = "The DNS servers for the routable network, e.g. 8.8.8.8"
+      default = ["8.8.8.8"]
+    }
+
+    # gp-virtual-internal network settings
+    variable "gp_virtual_internal_ipv4_prefix" {
+      type = string
+      description = "The leading octets for the exclusively internal network IP range, e.g. '192.168.1.'"
+      default = "192.168.1."
+    }
+    variable "gp_virtual_internal_ipv4_netmask" {
+      description = "Netmask bitcount, e.g. 24"
+      default = 24
+    }
+    variable "master_gp_virtual_internal_ipv4_offset" {
+      description = "The starting IP of the master VM in gp-virtual-internal"
+      default = 250
+    }
+    variable "segment_gp_virtual_internal_ipv4_offset" {
+      description = "The starting IP of the segment VM in gp-virtual-internal"
+      default = 2
+    }
+
+    # gp-virtual-etl-bar network settings
+    variable "gp_virtual_etl_bar_ipv4_prefix" {
+      type = string
+      description = "The leading octets for the data backup (doesn't have to be routable) network IP range, e.g. '192.168.2.'; make sure its not conflicting with 'gp_virtual_internal_ipv4_prefix'"
+      default = "192.168.2."
+    }
+    variable "gp_virtual_etl_bar_ipv4_netmask" {
+      description = "Netmask bitcount, e.g. 24"
+      default = 24
+    }
+    variable "master_gp_virtual_etl_bar_ipv4_offset" {
+      description = "The starting IP of the master VM in gp-virtual-etl-bar"
+      default = 250
+    }
+    variable "segment_gp_virtual_etl_bar_ipv4_offset" {
+      description = "The starting IP of the segment VM in gp-virtual-etl-bar"
+      default = 2
+    }
+
+    ######################
+    # terraform scripts
+    # PLEASE DO NOT CHANGE
+    ######################
+    provider "vsphere" {
+      user           = var.vsphere_user
+      password       = var.vsphere_password
+      vsphere_server = var.vsphere_server
+
+      # If you have a self-signed cert
+      allow_unverified_ssl = true
+    }
+
+    # all of these things need to be known for a deploy to work
+    data "vsphere_datacenter" "dc" {
+      name          = var.vsphere_datacenter
+    }
+
+    data "vsphere_datastore" "datastore" {
+      name          = var.vsphere_datastore
+      datacenter_id = data.vsphere_datacenter.dc.id
+    }
+
+    data "vsphere_network" "gp_virtual_external_network" {
+      name          = var.gp_virtual_external_network
+      datacenter_id = data.vsphere_datacenter.dc.id
+    }
+
+    data "vsphere_network" "gp_virtual_internal_network" {
+      name          = var.gp_virtual_internal_network
+      datacenter_id = data.vsphere_datacenter.dc.id
+    }
+
+    # vSphere distributed port group for ETL, backup and restore traffic
+    data "vsphere_network" "gp_virtual_etl_bar_network" {
+      name          = var.gp_virtual_etl_bar_network
+      datacenter_id = data.vsphere_datacenter.dc.id
+    }
+
+    data "vsphere_compute_cluster" "compute_cluster" {
+      name          = var.vsphere_compute_cluster
+      datacenter_id = data.vsphere_datacenter.dc.id
+    }
+
+    data "vsphere_storage_policy" "policy" {
+      name = var.vsphere_storage_policy
+    }
+
+    # this points at the template created by the image folder
+    data "vsphere_virtual_machine" "template" {
+      name          = var.vm_template_name
+      datacenter_id = data.vsphere_datacenter.dc.id
+    }
+
+    locals {
+      memory = data.vsphere_virtual_machine.template.memory
+      memory_reservation = data.vsphere_virtual_machine.template.memory / 2
+      num_cpus = data.vsphere_virtual_machine.template.num_cpus
+      root_disk_size_in_gb = data.vsphere_virtual_machine.template.disks[0].size
+      data_disk_size_in_gb = data.vsphere_virtual_machine.template.disks[1].size
+    }
+
+    resource "vsphere_resource_pool" "pool" {
+      name                    = "${var.resource_pool_name}-${var.greenplum_instance_id}"
+      parent_resource_pool_id = data.vsphere_compute_cluster.compute_cluster.resource_pool_id
+    }
+
+    resource "vsphere_virtual_machine" "segment_hosts" {
+      count = var.number_of_segment_vms
+      name = format("gp-%d-sdw-%0.3d", var.greenplum_instance_id, count.index + 1)
+      resource_pool_id = vsphere_resource_pool.pool.id
+      wait_for_guest_net_routable = false
+      wait_for_guest_net_timeout = 0
+      guest_id = data.vsphere_virtual_machine.template.guest_id
+      datastore_id = data.vsphere_datastore.datastore.id
+      storage_policy_id = data.vsphere_storage_policy.policy.id
+      scsi_controller_count = 2
+
+      memory = local.memory
+      memory_reservation = local.memory_reservation
+      num_cpus = local.num_cpus 
+      cpu_share_level = "normal"
+      memory_share_level = "normal"
+
+      network_interface {
+        network_id = data.vsphere_network.gp_virtual_internal_network.id
+      }
+
+      network_interface {
+        network_id = data.vsphere_network.gp_virtual_etl_bar_network.id
+      }
+
+      swap_placement_policy = "vmDirectory"
+      enable_disk_uuid = "true"
+      disk {
+        label = "disk0"
+        size  = local.root_disk_size_in_gb
+        unit_number = 0
+        datastore_id = data.vsphere_datastore.datastore.id
+        storage_policy_id = data.vsphere_storage_policy.policy.id
+      }
+
+      disk {
+        label = "disk1"
+        size  = local.data_disk_size_in_gb
+        unit_number = 1
+        datastore_id = data.vsphere_datastore.datastore.id
+        storage_policy_id = data.vsphere_storage_policy.policy.id
+      }
+
+      clone {
+        template_uuid = data.vsphere_virtual_machine.template.id
+
+        customize {
+          linux_options {
+            host_name = "sdw${count.index + 1}"
+            domain    = "local"
+          }
+
+          network_interface {
+            ipv4_address = "${var.gp_virtual_internal_ipv4_prefix}${count.index + var.segment_gp_virtual_internal_ipv4_offset}"
+            ipv4_netmask = var.gp_virtual_internal_ipv4_netmask
+          }
+
+          network_interface {
+            ipv4_address = "${var.gp_virtual_etl_bar_ipv4_prefix}${count.index + var.segment_gp_virtual_etl_bar_ipv4_offset}"
+            ipv4_netmask = var.gp_virtual_etl_bar_ipv4_netmask
+          }
+        }
+      }
+    }
+
+    resource "vsphere_virtual_machine" "master_hosts" {
+      count = 2
+      name = count.index == 0 ? format("gp-%d-mdw", var.greenplum_instance_id) : count.index == 1 ? format("gp-%d-smdw", var.greenplum_instance_id) : format("gp-%d-smdw-%d", var.greenplum_instance_id, count.index)
+      resource_pool_id = vsphere_resource_pool.pool.id
+      wait_for_guest_net_routable = false
+      wait_for_guest_net_timeout = 0
+      guest_id = data.vsphere_virtual_machine.template.guest_id
+      datastore_id = data.vsphere_datastore.datastore.id
+      storage_policy_id = data.vsphere_storage_policy.policy.id
+
+      memory = local.memory
+      memory_reservation = local.memory_reservation
+      num_cpus = local.num_cpus
+      cpu_share_level = "normal"
+      memory_share_level = "normal"
+
+      network_interface {
+        network_id = data.vsphere_network.gp_virtual_internal_network.id
+      }
+
+      network_interface {
+        network_id = data.vsphere_network.gp_virtual_etl_bar_network.id
+      }
+
+      network_interface {
+        network_id = data.vsphere_network.gp_virtual_external_network.id
+      }
+
+      swap_placement_policy = "vmDirectory"
+      enable_disk_uuid = "true"
+
+      disk {
+        label = "disk0"
+        size  = local.root_disk_size_in_gb
+        unit_number = 0
+        datastore_id = data.vsphere_datastore.datastore.id
+        storage_policy_id = data.vsphere_storage_policy.policy.id
+      }
+
+      disk {
+        label = "disk1"
+        size  = local.data_disk_size_in_gb
+        unit_number = 1
+        datastore_id = data.vsphere_datastore.datastore.id
+        storage_policy_id = data.vsphere_storage_policy.policy.id
+      }
+
+      clone {
+        template_uuid = data.vsphere_virtual_machine.template.id
+        customize {
+          linux_options {
+            # master is always the first
+            # standby master is always the second
+            host_name = count.index == 0 ? format("mdw") : format("smdw")
+            domain    = "local"
+          }
+
+          network_interface {
+            ipv4_address = "${var.gp_virtual_internal_ipv4_prefix}${count.index + var.master_gp_virtual_internal_ipv4_offset}"
+            ipv4_netmask = var.gp_virtual_internal_ipv4_netmask
+          }
+
+          network_interface {
+            ipv4_address = "${var.gp_virtual_etl_bar_ipv4_prefix}${count.index + var.master_gp_virtual_etl_bar_ipv4_offset}"
+            ipv4_netmask = var.gp_virtual_etl_bar_ipv4_netmask
+          }
+
+          network_interface {
+            ipv4_address = "${var.gp_virtual_external_ipv4_prefix}${count.index + var.master_gp_virtual_external_ipv4_offset}"
+            ipv4_netmask = var.gp_virtual_external_ipv4_netmask
+          }
+
+          ipv4_gateway = var.gp_virtual_external_gateway
+          dns_server_list = var.dns_servers
+        }
+      }
+    }
+
+    resource "vsphere_compute_cluster_vm_anti_affinity_rule" "master_vm_anti_affinity_rule" {
+        count               = 1
+        enabled             = true
+        mandatory           = true
+        compute_cluster_id  = data.vsphere_compute_cluster.compute_cluster.id
+        name                = format("master-vm-anti-affinity-rule")
+        virtual_machine_ids = toset(vsphere_virtual_machine.master_hosts.*.id)
+    }
+
+    resource "vsphere_compute_cluster_vm_anti_affinity_rule" "segment_vm_anti_affinity_rule" {
+        count               = var.number_of_segment_vms / 2
+        enabled             = true
+        mandatory           = true
+        compute_cluster_id  = data.vsphere_compute_cluster.compute_cluster.id
+        name                = format("segment-vm-anti-affinity-rule-sdw%0.3d-sdw%0.3d", count.index*2+1, count.index*2+2)
+        virtual_machine_ids = [
+            element(vsphere_virtual_machine.segment_hosts.*.id, count.index*2),
+            element(vsphere_virtual_machine.segment_hosts.*.id, count.index*2+1),
+        ]
+    }</code></pre>
+    <button type="button" name="button1"><a href="#" onclick="CopyToClipboard('command1');return false;">Copy</a></button>
+
+1. Update the following variables under the **Terraform variables** section of the `main.tf` script with the correct values for your environment. You collected the required information in the [Prerequisites](prerequisites.html) section.
+
+    | Variable | Description |
+    | -------------- | --------- |
+    | vsphere_user | Name of the vSphere administrator level user. |
+    | vsphere_password | Password of the vSphere administrator level user. |
+    | vsphere_server | The IP address or the Fully-Qualified Domain Name (FQDN) of your vCenter server. |
+    | vsphere_datacenter | The name of the data center for Greenplum in your vCenter environment. |
+    | vsphere_compute_cluster | The name of the compute cluster for Greenplum in your data center. |
+    | vsphere_datastore | The name of the vSAN datastore which will contain your Greenplum data. |
+    | vsphere_storage_policy | The name of the storage policy defined during <a href="vsphere-storage-setup.html#ha">Setting Up vSphere Storage</a> or <a href="encryption.html#option1">Setting Up vSphere Encryption</a>. | 
+    | number_of_segment_vms | The total number of primary and mirror segments in your Greenplum installation. |
+    | gp_virtual_external_ipv4_prefix | The first three octets for the external network `gp-virtual-external`; for example: `10.0.0.`. |
+    | gp_virtual_external_ipv4_netmask | The number of bits in the netmask for `gp-virtual-external`; for example: `24`. |
+    | master_gp_virtual_external_ipv4_offset | The starting IP of the final octet for Greenplum's master node on the `gp-virtual-external` network; for example: `10`. |
+    | gp_virtual_external_gateway | The gateway IP address for the `gp-virtual-external` network. |
+    | dns_servers | The DNS servers for the `gp-virtual-external` network, listed as an array; for example: `["8.8.8.8", "8.8.4.4"]`. |
+    | gp_virtual_internal_ipv4_prefix | The first three octets for the internal, non-routable network `gp-virtual-internal`; for example: `192.168.0.`. It should match 'Internal Network IP Prefix' entered during the 'Configuring the Greenplum Virtual Machine Template' step. |
+    | gp_virtual_internal_ipv4_netmask | The number of bits in the netmask for `gp-virtual-internal`; for example: `24`. |
+    | master_gp_virtual_internal_ipv4_offset | The starting IP of the final octet for Greenplum's master node on the `gp-virtual-internal` network; for example: `250`. |
+    | segment_gp_virtual_internal_ipv4_offset | The starting IP of the final octet for Greenplum's first segment node on the `gp-virtual-internal network`; for example: `1`. |
+    | gp_virtual_etl_bar_ipv4_prefix | The first three octets for the internal, non-routable network `gp-virtual-etl-bar`; for example: `192.168.1.`. |
+    | gp_virtual_etl_bar_ipv4_netmask | The number of bits in the netmask for `gp-virtual-etl-bar`; for example: `24`. |
+    | master_gp_virtual_etl_bar_ipv4_offset | The starting IP of the final octet for Greenplum's master node on the `gp-virtual-etl-bar` network; for example: `250`. |
+    | segment_gp_virtual_etl_bar_ipv4_offset | The starting IP of the final octet for Greenplum's first segment node on the `gp-virtual-etl-bar` network; for example: `1`. |
+
+    <p>&nbsp;</p>
+
+1. Initialize Terraform:
+
+    ```
+    $ terraform init
+    ```
+
+    You should get the following output:
+
+    ```
+    Terraform has been successfully initialized!
+
+    You may now begin working with Terraform. Try running "terraform plan" to see
+    any changes that are required for your infrastructure. All Terraform commands
+    should now work.
+
+    If you ever set or change modules or backend configuration for Terraform,
+    re-run this command to reinitialize your working directory. If you forget, other
+    commands will detect it and remind you to do so if necessary.
+    ```
+
+1. Verify that your Terraform configuration is correct by running the following command:
+
+    ```
+    $ terraform plan
+    ```
+
+1. Deploy the cluster:
+
+    ```
+    $ terraform apply
+    ```
+
+    Answer Yes to the following prompt:
+
+    ```
+    Do you want to perform these actions?
+      Terraform will perform the actions described above.
+      Only 'yes' will be accepted to approve.
+
+        Enter a value: yes
+    ```
+
+The virtual machines will be created and configured to deploy your Greenplum cluster. You can check the progress under the Recent Tasks panel on your vSphere client.
+
+Once Terraform has completed,  it generates a file named `terraform.tfstate`. This file **must not be deleted**, as it keeps a record of all the virtual machines and their states.
+Terraform  also uses this file when modifying any virtual machines.
+We also recommend to retain a snapshot of the jumpbox virtual machine.
+
+## <a id="timeout"></a>Terraform timeout
+
+Occasionally, Terraform may time out when deploying the virtual machines. If a virtual machine cannot be cloned within the timeout value, by default 30 minutes, Terraform will fail and the cluster setup will be incomplete. Terraform will report the following error:
+
+```
+error cloning virtual machine: timeout waiting for clone to complete
+```
+
+You must review the root cause of the issue which resides within the vCenter environment, check host and storage performance in order to find out why a virtual machine is taking over 30 minutes to be cloned. There are two ways of working around this issue by editing Terraform settings:
+
+1. Reduce the parallelism of Terraform from 10 to 5 and redeploy the cluster by running the following command:
+
+    ```
+    terraform apply --parallelism 5
+    ```
+
+2. Increase the Terraform timeout property, set in minutes. See more about this property in the [Terraform documentation](https://registry.terraform.io/providers/hashicorp/vsphere/latest/docs/resources/virtual_machine#creating-a-virtual-machine-from-a-template).
+
+    Modify the `main.tf` script in two places, one for the `segment_hosts` and another one for the `master_hosts`, add the property `timeout` under the `clone` section:
+
+    ```
+    ...
+    resource "vsphere_virtual_machine" "segment_hosts" {
+    ...
+
+      clone {
+    ...
+        timeout = 40
+    ...
+       }
+    }
+
+    resource "vsphere_virtual_machine" "master_hosts" {
+    ...
+      clone {
+    ...
+        timeout = 40
+    ...
+      }
+    }
+    ```
+    After saving the changes, rerun `terraform apply` to redeploy the cluster.
+
+## <a id="validation"></a>Validating the Deployment
+
+Once Terraform has provisioned the virtual machines, perform the following validation steps:
+
+1. Validate the Resource Pool for the Greenplum cluster.
+    1. Log in to vCenter and navigate to **Hosts and Clusters**.
+    1. Select the newly created resource pool and verify that the **Resource Settings** are as below:
+
+        <img src="images/validation01.png" class="image" width="500" alt="centered image"/><br />
+    Note that the **Worst Case Allocation** fields will differ depending on what is currently running in your environment.
+
+    1. Click the expanding arrow next to the resource pool name, you should see all the newly created virtual machines: `gp-1-mdw`, `gp-1-smdw`, `gp-1-sdw1`, etc.
+
+1. Validate that the `gp-virtual-internal` network is working.
+    1. Log in to the master node as `root`.
+    1. Switch to `gpadmin` user.
+
+        ```
+        $ su - gpadmin
+        ```
+
+    1. Make sure that the file `/home/gpadmin/hosts-all` exists.
+    1. Use the `gpssh` command to verify connectivity to all nodes in the `gp-virtual-internal` network.
+
+        ```
+        $ gpssh -f hosts-all -e hostname
+        ```
+
+1. Validate the MTU settings on all virtual machines.
+    1. Log in to the master node as `root`.
+    1. Use the `gpssh` command to verify the value of the MTU.
+
+        ```
+        $ source /usr/local/greenplum-db/greenplum_path.sh
+        $ gpssh -f /home/gpadmin/hosts-all -e "ifconfig ens192 | grep -i mtu"
+        ```
+
+1. Clean Up the Temporary vSphere Admin Account
+
+If you created a temporary vSphere administrator level user such as `greenplum`, it is safe to remove it now.
+
+## <a id="next"></a>Next Steps
+
+You are now ready to deploy Greenplum Database using the newly created virtual machines. Proceed to [Deploying Greenplum](deploying-greenplum.html) and follow the steps provided.

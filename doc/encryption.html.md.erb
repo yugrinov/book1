@@ -1,0 +1,144 @@
+---
+title: "Setting Up vSphere Encryption"
+---
+
+VMware Tanzu Greenplum on Dell EMC VxRail supports two encryption options: Virtual Machine (VM) encryption and vSAN encryption. This topic compares the two methods and provides the prerequisites and instructions to set up an end-to-end encrypted Greenplum cluster.
+
+VMware recommends [enabling AES-NI](https://kb.vmware.com/s/article/52083) in the host BIOS to improve encryption performance. Enabling encryption has 2% CPU overhead and 0.5% memory overhead, and it causes no impact on IOPS and throughput.
+
+## <a id="methods"></a>Virtual Machine Encryption versus vSAN Encryption
+
+vSAN datastore encryption and VM encryption vary in several key areas. You can find more details in the [VMware Knowledge Base](https://kb.vmware.com/s/article/2148947).
+
+A key consideration is data-in transit encryption across hosts in your vSAN cluster, and data-at-rest encryption in your vSAN datastore. Data-in-transit encryption protects data and metadata as they move around the vSAN cluster, while Data-at-rest encryption protects data on storage devices, in case a device is removed from the cluster. You can read more about encryption types [here](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.vsan.doc/GUID-F3B2714F-3406-48E7-AC2D-3677355C94D3.html).
+
+The following table shows a quick feature comparison:
+
+| Feature/Function                             | vSAN Encryption        | VM Encryption        |
+|----------------------------------------------|------------------------|----------------------|
+| Uses an external key-management server (KMS) | √                      | √                    |
+| Per-VM Encryption                            | X                      | √                    |
+| Whole-datastore encryption                   | √                      | X                    |
+| Data-at-Rest encryption                      | √                      | √                    |
+| End-to-end encryption                        | X                      | √                    |
+| VMs encrypted by                             | Placement on datastore | Storage Policy       |
+| Encryption occurs                            | After deduplication    | Before deduplication |
+
+Based on the above:
+
+- If your objective is end-to-end encryption, use VM encryption.
+- If you prefer to have policy-controlled encryption (a mix of encrypted and unencrypted clusters), use VM encryption.
+- If your objective is data-at-rest encryption, use vSAN encryption.
+- If you prefer to enforce having all the virtual machines within a given vSAN datastore with data-at-rest encryption, use vSAN encryption.
+
+## <a id="enableencryp"></a> Enabling Encryption on Greenplum
+
+VMware recommends using [virtual machine encryption](#option1) to avoid the associated overhead when encrypting and unencrypting the vSAN. However, you may choose to use [vSAN encryption](#option2) instead, based on your environment requirements.
+
+<div class="note"><b>Note:</b> Never use both encryption methods together as it will result in a double encryption with no additional benefits on data protection, but with double the overhead caused by encryption.</div>
+
+### <a id="prereq"></a>Prerequisites
+
+Regardless of the encryption method, these prerequisites must be met:
+
+- Set up and enable the Native Key Provider (NKP) in vCenter. vSphere 7.0U2 introduces the Native Key Provider (NKP) which simplifies the key creation process. Use NKP unless there is already an existing Standard Key Provider in the environment. You can read more about key providers [here](https://core.vmware.com/blog/introducing-vsphere-native-key-provider). For configuration details, see [Configure a vSphere Native Key Provider](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.security.doc/GUID-1C3B2BAC-A2D1-4F15-86AF-1E7DE9F850D8.html)
+
+    Also ensure the NKP is backed up. For details, see [Back Up a vSphere Native Key Provider](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.security.doc/GUID-E0EB371A-F6E4-463B-A1E9-9D4DDCAA039D.html#GUID-E0EB371A-F6E4-463B-A1E9-9D4DDCAA039D).
+
+- Enable Host Encryption Mode. For more details see [Enable Host Encryption Mode Explicitly](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.security.doc/GUID-A9E1F016-51B3-472F-B8DE-803F6BDB70BC.html). To verify the results, on each ESXi host, view the Security Profile.
+
+### <a id="option1"></a>Option 1: Enabling Virtual Machine Encryption
+
+Enable encryption at the virtual machine level by creating a vSphere storage policy using the steps below:
+
+1. Select **Home** -> **Policies and Profiles** -> **VM Storage Policies**.
+
+1. Click **Create**.
+
+1. Enter a Storage Policy name and optional description and click **Next**. This example uses **vSAN Greenplum FFT1 RAID1 Stripe1 Thick VM Encryption** as the policy name.
+
+1. Under **Policy structure**, check the **Enable host based rules** box and the **Enable rules for vSAN storage** box.
+
+    <img src="images/encryption11.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **Host based services**, select **Default encryption properties** to enable VM encryption.
+
+    <img src="images/encryption12.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Availability**,  select the **RAID-1 mirroring** vSAN policy. If you are using a different configuration, adjust this parameter accordingly.
+
+    <img src="images/encryption13.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Storage Rules**, select **No Encryption**, **No space efficiency**, and **All flash**.
+
+    <img src="images/encryption14.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Advanced Policy Rules**, specify **1** for **Number of disk stripes per object**, and **Thick provisioning**.
+
+    <img src="images/encryption15.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **Storage Compatibility**, check that your vSAN storage is compatible with the storage policy.
+
+1. Review the **Summary** page. It should look similar to this:
+
+    <img src="images/encryption17.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+### <a id="option2"></a>Option 2: Enabling vSAN Encryption
+
+In order to enable encryption at the vSAN level, you must first enable vSAN encryption and then create the vSphere storage policy.
+
+#### <a id="step1"></a>Step 1: Enabling vSAN encryption
+
+1. Navigate to your cluster and click the **Configure** tab.
+
+1. Under **vSAN**, select **Services**.
+
+1. Click the vSAN Services **Edit** button.
+
+    <img src="images/encryption09.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Ensure that space efficiency is set to **None**.
+
+1. Ensure that **Data-At-Rest** encryption is enabled.
+
+    <div class="note"><b>Note:</b> There is a <b>Data-in-Transit encryption</b> option, which is for the vSAN to ensure that the data is encrypted when transferring data between hosts. However, if you are looking for that level of encryption, we recommend that you use VM encryption instead, which will provide the entire end-to-end encryption, including the encryption-in-transit and encryption-at-rest.</div>
+
+1. Select a key provider and click **Apply**.
+
+From this point, the vSAN will start to provision the disk groups with a new encryption format. Note that this could take several hours, depending on the size of your vSAN storage.
+
+#### <a id="step2"></a>Step 2: Creating the vSphere storage policy
+
+1. Select **Home**, click **Policies and Profiles**, and click **VM Storage Policies**.
+
+1. Click **Create**.
+
+1. Enter a Storage Policy name and optional description and click **Next**. This example uses **vSAN Greenplum FFT1 RAID1 Stripe1 Thick vSAN Encryption** as the policy name.
+
+1. Under **Policy structure**, check the **Enable rules for vSAN storage** box.
+
+    <img src="images/vsanencr1.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Availability**,  select the **RAID-1 mirroring** vSAN policy. If you are using a different configuration, adjust this parameter accordingly.
+
+    <img src="images/vsanencr2.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Storage Rules**, select **Data-At-Rest Encryption**,  **No space efficiency**, and **All flash**.
+
+    <img src="images/vsanencr3.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Advanced Policy Rules**, specify **1** for **Number of disk stripes per object**, and **Thick provisioning**.
+
+    <img src="images/vsanencr4.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **Storage Compatibility**, check that your vSAN storage is compatible with the storage policy.
+
+1. Review the **Summary** page. It should look similar to this:
+
+    <img src="images/vsanencr5.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+## <a id="next"></a>Next Steps
+
+You have completed setting up Dell EMC VxRail with vSphere. Proceed to [Validating Dell EMC VxRail Setup Performance](validating-vxrail.html) in order to verify network connectivity and test vSAN performance with HCIBench.
+
+

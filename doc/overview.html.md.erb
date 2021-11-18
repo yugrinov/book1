@@ -1,0 +1,29 @@
+---
+title: "Overview"
+---
+
+VMware Tanzu Greenplum on Dell EMC VxRail with vSphere offers a next generation virtualized platform for bare metal Greenplum users. It provides Greenplum as a Platform, reducing the cost of maintaining a fleet of running Greenplum Database clusters on bare metal.
+
+This documentation explains best practices on the entire stack, from physical configuration all the way up to the Greenplum Database software layer.
+
+In summary, you will go through the following steps:
+
+Visit [Planning Dell EMC VxRail with Greenplum](planning.html), where you explore the requirements and different hardware configurations available in order to size your Dell EMC VxRail with vSphere environment depending on your Greenplum Database needs.
+There is a relationship between the number of ESXi hosts and the total Greenplum Database capacity of your cluster; this impacts the number and size of the virtual machines that you will deploy. You must ensure that your vSphere environment is able to handle the quantity of resources required, as it will ensure adequate disk storage space, and data processing throughput to meet your end user SLAs.
+
+Follow [Prerequisites](prerequisites.html), [Setting Up vSphere Network](vsphere-network-setup.html), [Setting Up vSphere DRS and HA](vsphere-drs-ha-setup.html), [Setting Up vSphere Storage](vsphere-storage-setup.html), and [Setting Up vSphere Encryption](encryption.html) to configure your Dell EMC VxRail with vSphere environment. Based on the recommended topology of Dell EMC VxRail, you will configure the vSphere network and storage, as well as enable and set up vSphere features such as High Availability or Distributed Resource Scheduler. Optionally, you may enable encryption.
+
+When the vSphere environment is set up, use [HCIBench](validating-vxrail.html) to verify network connectivity and evaluate the vSAN performance of your environment.
+
+Once the vSphere environment is verified, create a [jumpbox virtual machine](jumpbox.html) and install Terraform in it. Then create a [virtual machine template](vm-template.html) and configure it based on the system requirements for Greenplum Database. 
+
+Using Terraform and the jumpbox virtual machine, [generate a number of virtual machines](allocating-vms.html) from the template which will comprise all the components of a Greenplum Database cluster.
+
+Finally, [deploy the Greenplum Database cluster](deploying-greenplum.html).
+
+This documentation also provides information regarding [single host failure scenarios](host-failure.html) and [host maintenance best practices](planned-maintenance.html).
+
+## <a id="start"></a>Getting Started
+
+Visit the [Architecture](architecture.html) page to learn about how VMware Tanzu Greenplum on Dell EMC VxRail works. Then visit [Planning Dell EMC VxRail with Greenplum](planning.html) to start planning and sizing your environment.
+

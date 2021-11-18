@@ -1,0 +1,45 @@
+---
+title: "Setting Up vSphere Storage"
+---
+
+vSphere storage polices define storage requirements for the virtual machines. These policies determine how the virtual machine storage objects are provisioned and allocated within the datastore to guarantee the required level of service. 
+
+This section provides instructions for creating a vSphere storage policy in a vSphere environment where no level of encryption is required. To configure storage policies when encryption is used, see [Setting Up vSphere Encryption](encryption.html).
+
+## <a id="ha"></a>Creating the Storage Policies
+
+The following steps set up a vSphere storage policy with no encryption for a four-host configuration using RAID1.
+
+1. Select **Home** -> **Policies and Profiles** -> **VM Storage Policies**.
+
+1. Click **Create**.
+
+1. Enter a Storage Policy name and optional description and click **Next**. This example uses **vSAN Greenplum FFT1 RAID1 Stripe1 Thick No Encryption** as the policy name.
+
+1. Under **Policy structure**, check the **Enable rules for vSAN storage** box.
+
+    <img src="images/storage1.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Availability**,  select the **RAID-1 mirroring** vSAN policy. If you are using a different configuration, adjust this parameter accordingly.
+
+    <img src="images/storage2.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Storage Rules**, select **No Encryption**, **No space efficiency**, and **All flash**.
+
+    <img src="images/storage3.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **vSAN** - **Advanced Policy Rules**, specify **1** for **Number of disk stripes per object**, and **Thick provisioning**.
+
+    <img src="images/storage4.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **Storage Compatibility**, check that your vSAN storage is compatible with the storage policy.
+
+    <img src="images/storage5.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Review the **Summary** page. It should look similar to this:
+
+    <img src="images/storage6.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+## <a id="next"></a>Next Steps
+
+You have completed setting up Dell EMC VxRail with vSphere. Proceed to [Validating Dell EMC VxRail Setup Performance](validating-vxrail.html) in order to verify network connectivity and test vSAN performance with HCIBench.

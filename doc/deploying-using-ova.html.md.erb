@@ -1,0 +1,150 @@
+---
+title: "Option 1: Deploying Greenplum Using a Pre-built OVA"
+---
+
+In this section, you download the Photon OS 3.0 Greenplum Database OVA template, deploy the OVA in vSphere, perform a series of configuration changes to the virtual machine, and create a template from it. Finally, you verify that the virtual machine is in configured correctly by running the `/etc/gpv/validate` utility.
+
+## <a id="ova-download"></a>Downloading the Greenplum Database to a local machine
+
+1. From VMware Marketplace
+
+## <a id="ova-deploy"></a>Deploying the Greenplum Database Template OVA
+
+1. Log in to vCenter and navigate to **Hosts and Clusters**.
+1. Right click your cluster, then click **Deploy OVF Template**.
+1. Choose **Local file**, select the OVA file from your local machine, then click **Next**.
+1. Set **Virtual machine name** as `greenplum-db-template`. Select the desired Datacenter, then click **Next**.
+1. Select the desired compute resource, then click **Next**. Wait while vCenter queries the OVA advanced configuration options.
+1. Verify that the **Review details** section is correct, then click **Next**.
+1. Select your vSAN storage, then click **Next**.
+1. Select `gp-virtual-external` as the **Destination Network**, then click **Next**.
+1. Configure the **Customize Template** section:
+  1. Set **Number of Segments** to the number of Greenplum segments you plan to deploy.
+  1. Set **Internal Network**:
+     * **Internal Network MTU Size** with the desired MTU size. The recommended size is 9000.
+     * **Internal Network IP Prefix** with the leading octets for the `gp-virtual-internal` network IP range, for example 192.168.1.
+  1. Set **Routable Networking**:
+     * **Hostname** as `greenplum-db-template`.
+     * **NTP Server** with a routable NTP server to sync with `mdw` and `smdw`.
+  1. Click **Next**.
+1. Review the configuration, then click **Finish**.
+1. Do not power on the template until you have updated memory and CPU resources.
+
+## <a id="ova-mod"></a>Modifying Memory and CPU Resources
+
+Based on your underlying hardware, you may need to change the default settings for CPU and memory, which are preset to 8 vCPU and 30 GB respectively.
+
+1. Right click the `greenplum-db-template` virtual machine, then click **Edit Settings**.
+1. If you want to change the memory size, click on the number on the right of **Memory** and enter the desired allocated memory.
+1. If you want to change the number of CPUs, click on the number on the right of **CPU** and select the desired number of CPUs.
+1. Click **OK**.
+1. Power on the `greenplum-db-template` virtual machine.
+
+## <a id="ova-validate"></a>Validating the Virtual Machine Template
+1. Launch the web console and log in as `gpadmin` with the password `changeme`.
+1. Follow the prompt to reset the password of `gpadmin`.
+1. Use Ctrl+D to log out, then try login as `root` with password `changeme`.
+1. Follow the prompt to reset the password of `root`.
+1. As root, run `/etc/gpv/validate` and ensure there are no errors.
+1. If there are no errors, power off the virtual machine.
+
+## <a id="provision"></a>Provisioning the Virtual Machines
+
+Use the Terraform software you installed in [Creating the Jumpbox Virtual Machine](jumpbox.html#terraform) to generate copies of the template virtual machine you just created, you will configure them based on the number of virtual machines in your environment, IP address ranges, and other settings you specify in the installation script.
+
+1. Log in to the jumpbox virtual machine as `root`.
+1. Download the <a href="scripts/ova/main.tf"  target="_blank">main.tf</a> file, and `scp` the file to the jumpbox as `root` user under home directory.
+1. Update the following variables under the **Terraform variables** section of the `main.tf` script with the correct values for your environment. You collected the required information in the [Prerequisites](prerequisites.html) section.
+
+    | Variable | Description |
+    | -------------- | --------- |
+    | vsphere_user | Name of the vSphere administrator level user. |
+    | vsphere_password | Password of the vSphere administrator level user. |
+    | vsphere_server | The IP address or the Fully-Qualified Domain Name (FQDN) of your vCenter server. |
+    | vsphere_datacenter | The name of the data center for Greenplum in your vCenter environment. |
+    | vsphere_compute_cluster | The name of the compute cluster for Greenplum in your data center. |
+    | vsphere_datastore | The name of the vSAN datastore which will contain your Greenplum data. |
+    | vsphere_storage_policy | The name of the storage policy defined during <a href="vsphere-storage-setup.html#ha">Setting Up vSphere Storage</a> or <a href="encryption.html#option1">Setting Up vSphere Encryption</a>. |
+    | gp_virtual_external_ipv4_prefix | The first three octets for the external network `gp-virtual-external`; for example: `10.0.0.`. |
+    | gp_virtual_external_ipv4_netmask | The number of bits in the netmask for `gp-virtual-external`; for example: `24`. |
+    | master_gp_virtual_external_ipv4_offset | The starting IP of the final octet for Greenplum's master node on the `gp-virtual-external` network; for example: `10`. |
+    | gp_virtual_external_gateway | The gateway IP address for the `gp-virtual-external` network. |
+    | dns_servers | The DNS servers for the `gp-virtual-external` network, listed as an array; for example: `["8.8.8.8", "8.8.4.4"]`. |
+    | gp_virtual_etl_bar_ipv4_prefix | The first three octets for the internal, non-routable network `gp-virtual-etl-bar`; for example: `192.168.1.`. |
+    | gp_virtual_etl_bar_ipv4_netmask | The number of bits in the netmask for `gp-virtual-etl-bar`; for example: `24`. |
+    | master_gp_virtual_etl_bar_ipv4_offset | The starting IP of the final octet for Greenplum's master node on the `gp-virtual-etl-bar` network; for example: `250`. |
+    | segment_gp_virtual_etl_bar_ipv4_offset | The starting IP of the final octet for Greenplum's first segment node on the `gp-virtual-etl-bar` network; for example: `1`. |
+
+    <p>&nbsp;</p>
+
+1. Initialize Terraform:
+
+    ```
+    $ terraform init
+    ```
+
+    You should get the following output:
+
+    ```
+    Terraform has been successfully initialized!
+
+    You may now begin working with Terraform. Try running "terraform plan" to see
+    any changes that are required for your infrastructure. All Terraform commands
+    should now work.
+
+    If you ever set or change modules or backend configuration for Terraform,
+    re-run this command to reinitialize your working directory. If you forget, other
+    commands will detect it and remind you to do so if necessary.
+    ```
+
+1. Verify that your Terraform configuration is correct by running the following command:
+
+    ```
+    $ terraform plan
+    ```
+
+1. Deploy the cluster:
+
+    ```
+    $ terraform apply
+    ```
+
+    Answer Yes to the following prompt:
+
+    ```
+    Do you want to perform these actions?
+      Terraform will perform the actions described above.
+      Only 'yes' will be accepted to approve.
+
+        Enter a value: yes
+    ```
+
+The virtual machines will be created and configured to deploy your Greenplum cluster.
+You can check the progress under the Recent Tasks panel on your vSphere client.
+
+Once Terraform has completed, it generates a file named `terraform.tfstate`.
+This file **must not be deleted**, as it keeps a record of all the virtual machines and their states.
+Terraform  also uses this file when modifying any virtual machines.
+We also recommend to retain a snapshot of the jumpbox virtual machine.
+
+## <a id="greenplum-deployment"></a>Monitoring the Greenplum Deployment
+
+The initialization of the Greenplum is fully automated in the `mdw` virtual machine.
+Once the `mdw` virtual machine is created by the Terraform script, you can log in to `mdw` as `root`, and monitor the deployment process by running:
+
+```
+$ journalctl -fu gpv-mdw
+```
+
+When the Greenplum cluster is initialized, you should see the following message:
+
+```
+Nov 09 16:54:11 mdw bash[2320]: 20211109:16:54:11:007979 gpstop:mdw:gpadmin-[INFO]:-Cleaning up leftover shared memory
+Nov 09 16:54:11 mdw bash[2320]: 20211109:16:54:11:007979 gpstop:mdw:gpadmin-[INFO]:-Restarting System...
+Nov 09 16:54:11 mdw bash[2320]: Greenplum Initialization Complete!
+
+```
+
+## <a id="next"></a>Next Steps
+
+Now that the Greenplum Database has been deployed, follow the steps provided in [Validating the Greenplum Installation](validating-greenplum-installation.html) to verify that Greenplum is installed correctly.

@@ -1,0 +1,164 @@
+---
+title: "Creating the Jumpbox Virtual Machine"
+---
+
+The jumpbox virtual machine is required to provision the cluster virtual machines for the Greenplum deployment. You must run the Terraform code provided in the next sections from this jumpbox virtual machine.
+
+
+## <a id="iso"></a>Uploading the ISO Image to vCenter
+
+1. Download the ISO file. The recommended version is `CentOS-7-x86_64-Minimal-2009.iso`. You can download it [here](http://isoredirect.centos.org/centos/7/isos/x86_64/). For example:
+
+    ```
+    $ curl -JLO http://mirrors.ocf.berkeley.edu/centos/7.9.2009/isos/x86_64/CentOS-7-x86_64-Minimal-2009.iso
+    ```
+
+1. Ensure that the `sha256sum` output of the downloaded ISO is correct:
+
+    ```
+    $ sha256sum CentOS-7-x86_64-Minimal-2009.iso
+    ```
+
+    The result should match the one provided with the download.
+
+1. Rename the ISO file to `centos7.iso`:
+
+    ```
+    $ mv CentOS-7-x86_64-Minimal-2009.iso centos7.iso
+    ```
+1. Log in to vCenter using the vSphere client.
+1. Right-click the datastore where you want to upload the ISO and select **Browse Files**.
+1. Click **New Folder** and create a new folder named `gp-jumpbox`.
+1. Upload `centos7.iso` into the `gp-jumpbox` directory.
+
+## <a id="deploy"></a>Deploying the Jumpbox Virtual Machine
+
+1. Navigate to the **Cluster** tab.
+1. Right click the **Cluster** to select the **New Virtual Machine** option.
+1. Select **Create new virtual machine**, then click **Next**.
+1. Name the virtual machine `gp-jumpbox`.
+1. Select your datacenter, then click **Next**.
+1. Select your cluster, then click **Next**.
+1. Select the vSAN datastore, then click **Next**.
+1. Select ESXi version **ESXi 7.0 U2 and later**, then click **Next**.
+1. Select **Guest OS**.
+    1. **Guest OS Family** should be **Linux**.
+    1. **Guest OS Version** should be **CentOS 7 (64-bit)**, then click **Next**.
+1. Under **Customize Hardware**:
+    1. Edit the existing network adapter **New Network** so that it connects to the `gp-virtual-external` port group.
+    1. Select **Add New Device** -> **Network Adapter**, and connect to the `gp-virtual-internal` port group.
+    1. Prepare to use the ISO as a source disk for installing CentOS.
+        1. Select **Add  New Device** -> **CD/DVD Drive**.
+        1. Select **Datastore ISO File** from the drop-down menu.
+        1. Navigate to the correct location of the uploaded CentOS ISO, then click **OK**.
+        1. Ensure that **Status: Connect At Power On** is enabled.
+    1. Leave the default settings for CPU, Memory and Disk and click **Next**.
+1. Review your configuration and then click **Finish**.
+
+## <a id="initialize"></a>Initializing the Jumpbox Virtual Machine
+
+1. Power on the newly created virtual machine and launch the web console.
+1. Select **Install CentOS 7** and press Enter.
+1. Select the preferred language and locale, then click **Continue**.
+1. Click on **Installation Destination** under **System**.
+    1. Under **Device Selection** -> **Local Standard Disk** select the desired disk, then click **Done**.
+1. Click **Network & Host Name** under **System**.
+    1. Enable the first network that connects to the `gp-virtual-external` port group.
+        1. If you are using DHCP, an IP address will be automatically assigned.
+        1. If you are using static IP assignment, click **Configure** -> **IPv4 Settings** and assign the corresponding IP address for the external network.
+        1. Click **Save**.
+    1. Select the second network, which connects to the `gp-virtual-internal` port group.
+        1. Click **Configure** -> **IPv4 Settings** and assign the corresponding IP address for the internal network.
+        1. Click **Save** and enable the network. You should see that an internal IP address being assigned to this interface.
+    1. Change the hostname to `gp-jumpbox` and then click **Apply**.
+    1. Click **Done**.
+1. Click **Begin Installation**.
+1. Set the `root` password, then click **Done**. Clicking **Done** a second time may be necessary.
+1. After setup is complete, click **Reboot**.
+1. Before continuing to the next section, verify that the virtual machine has external network access. Log in to the newly created virtual machine and run the following command:
+
+    ```
+    $ ping 8.8.8.8
+    ```
+
+    Note that you might need to manually install additional packages or tools that are not part of the minimal CentOS ISO image.
+
+## <a id="vmwtools"></a>Installing VMware Tools
+
+You can find more detailed instructions on the [VMware Knowledge Base](https://kb.vmware.com/s/article/1003910).
+
+1. On the vSphere client, right click your virtual machine. Select **Guest OS** -> **Install VMware Tools...**.
+1. Select **Mount**. This mounts an ISO file as a virtual CD-ROM.
+1. Retrieve the IP address of the adapter connected to the `gp-virtual-external` port group.
+1. Log in to gp-jumpbox.
+1. Install `perl`:
+
+    ```
+    $ yum install -y perl
+    ```
+1. Mount the ISO containing the VMware Tools binary.
+
+    ```
+    $ mkdir -p /mnt/cdrom
+    $ mount /dev/cdrom /mnt/cdrom
+    ```
+
+1. Extract the installation file.
+
+    ```
+    $ cd /tmp
+    $ tar -xzvf /mnt/cdrom/VMwareTools*.tar.gz
+    ```
+
+1. Umount the ISO.
+
+    ```
+    $ umount /mnt/cdrom
+    ```
+
+1. Install VMware Tools, choose **yes** for the first prompt, and use defaults for the remaining prompts.
+
+    ```
+    $ cd /tmp/vmware-tools-distrib
+    $ ./vmware-install.pl --force-install --default
+    ```
+
+1. Validate that VMware Tools is installed.
+
+    ```
+    $ systemctl status vmware-tools
+    ● vmware-tools.service - SYSV: Manages the services needed to run VMware software
+    Loaded: loaded (/etc/rc.d/init.d/vmware-tools; bad; vendor preset: disabled)
+    Active: active (running) since Wed 2021-06-02 18:14:34 EDT; 2min 59s ago
+        Docs: man:systemd-sysv-generator(8)
+    Process: 8636 ExecStart=/etc/rc.d/init.d/vmware-tools start (code=exited, status=0/SUCCESS)
+    CGroup: /system.slice/vmware-tools.service
+            ├─8739 /usr/sbin/vmtoolsd
+            └─8775 /usr/lib/vmware-vgauth/VGAuthService -s
+    ```
+
+## <a id="terraform"></a>Installing Terraform
+
+You must install Terraform on the jumpbox virtual machine. The minimum version required is `v0.14.3`. You can find more detailed instructions on the [Terraform website](https://www.terraform.io/downloads.html).
+
+1. Download and install the software.
+
+    ```
+    $ cd /tmp
+    $ yum install -y wget unzip
+    $ wget https://releases.hashicorp.com/terraform/0.15.5/terraform_0.15.5_linux_amd64.zip
+    $ unzip terraform_0.15.5_linux_amd64.zip
+    $ mv terraform /usr/local/bin/
+    ```
+
+1. Validate the installation.
+
+    ```
+    $ terraform --version
+    Terraform v0.15.5
+    on linux_amd64
+    ```
+
+## <a id="next"></a>Next Steps
+
+The jumpbox virtual machine is now ready for use. Continue to [Choosing your Deployment Option](deployment-options.html) to decide which deployment option will best fit your needs.

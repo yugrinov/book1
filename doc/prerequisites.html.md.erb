@@ -1,0 +1,36 @@
+---
+title: "Prerequisites"
+---
+
+You must meet certain prerequisites and collect specific information from your existing vSphere environment in order to proceed with the installation of VMware Tanzu Greenplum on Dell EMC VxRail. You may need to work with your system and network administrator to gather some of the information.
+
+## <a id="greenplum"></a>Greenplum Cluster
+
+- Ensure that you have determined the number and size of virtual machines that you will deploy, based on the Greenplum Database size discussed in the [Planning](planning.html#database) section.
+- You must verify that the free space in the datastore, the free memory in the cluster, and total amount of free processors in the cluster are enough to accommodate the virtual machine [Sizing](planning.html#sizing) requirements that match your configuration.
+
+## <a id="vsphere"></a>VMware vSphere
+
+- You must have access to VMware vSphere Client through a vSphere administrator level user that belongs to the Administrators group. In this documentation we use `greenplum@vsphere.local` with password `DeleteMe123!`. Refer to the [vSphere documentation](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.authentication.doc/GUID-31F302A6-D622-4FEC-9007-EE3BA1205AEA.html#GUID-31F302A6-D622-4FEC-9007-EE3BA1205AEA) for more information.
+- There are two possible ways of building your deployment, see [Choosing your Deployment Option](deployment-options.html). If you decide to build your own OVA template, you must have a running CentOS 7 virtual machine in the same datastore and cluster where you will deploy the Greenplum environment. You will need it to create the [virtual machine template](vm-template.html).
+- You must have access to the Internet to download the HCIBench 2.6.0 OVA file for [Validating Dell EMC VxRail Setup Performance](validating-vxrail.html), the ISO file for [Creating the Jumpbox Virtual Machine](jumpbox.html#iso) and the [Terraform software](jumpbox.html#terraform). You may decide to download these files beforehand. If you choose to deploy Greenplum with a pre-built OVA, you will also need to [download the Greenplum Database OVA](deploying-using-ova.html#ova-download).
+- Collect the following information from your vSphere environment, you will need it during the installation and setup stages.
+
+    - ESXi hosts IP addresses, host names, admin access name and passwords.
+    - vSphere server IP and Fully Qualified Domain Name (FQDN).
+    - vSphere datacenter name.
+    - vSphere vSAN datastore name.
+    - vSphere compute cluster name.
+
+## <a id="network"></a>Network
+
+Request the following from your network administrator, you will need it during installation. See [Setting Up vSphere Network](vsphere-network-setup.html) for more detailed information.
+
+- 4 routable IP addresses in the same network to be used for the external network `gp-virtual-external`.
+- 3 new VLAN IDs. You must also gather information about the existing VLANs in the vSphere environment and how they are interconnected.
+- 2 sets of contiguous non-routable IP addresses for the internal networks `gp-virtual-internal` and `gp-virtual-etl-bar`. The number of IP addresses per set must be your number of [calculated virtual machines](planning.html#vms) plus one for the jumpbox virtual machine. For example, for a four host setup, you will need two sets of 67 IP addresses each: 66 for Greenplum and one for the jumpbox. 
+- NTP server and DNS server IP address.
+
+## <a id="next"></a>Next Steps
+
+You are now ready to start with the installation and configuration of VMware Tanzu Greenplum on Dell EMC VxRail. Proceed to [Setting Up vSphere Network](vsphere-network-setup.html) to start configuring Dell EMC VxRail with vSphere.

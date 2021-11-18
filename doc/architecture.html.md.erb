@@ -1,0 +1,76 @@
+---
+title: "VMware Tanzu Greenplum on Dell EMC VxRail Architecture"
+---
+
+## <a id="architecture"></a>Layered Architecture
+
+As depicted in the diagram below, VMware Tanzu Greenplum on Dell EMC VxRail architecture is made up of multiple layers between Greenplum Database software and the underlying hardware. The architecture diagram describes the four abstraction layers. Although this document is designed specifically for Dell EMC VxRail (see [Dell EMC VxRail Reference Architecture](#vxrail)), conceptually the layers above the infrastructure layer can be leveraged in other vSphere environments, as long as the provider and infrastructure layers can provide similar or better infrastructure.
+
+- [Provider Layer](#provider)
+- [Infrastructure Layer](#infrastructure)
+- [Virtual Machine Cluster Layer](#vmcluster)
+- [Greenplum Database Layer](#greenplum)
+
+<img src="images/gp-virtual-architecture.png" width=800 alt="architecture">
+
+<a href="images/gp-virtual-architecture.png" target="_blank" aria-hidden="true">Click here to view a larger version of this diagram</a>
+
+### <a id="provider"></a>Provider Layer
+
+This layer represents the resource provider, which can be based on physical hardware or a cloud provider. For this reference architecture, the resource provider is Dell EMC VxRail.
+
+### <a id="infrastructure"></a>Infrastructure Layer
+
+The infrastructure layer defines the different networks and the data storage that the virtual machines will use on the upper layer.
+There are three networks defined within this layer: `gp-virtual-external`, `gp-virtual-internal` and  `gp-virtual-etl-bar`, and for this reference architecture the underlying data storage uses a vSAN cluster.
+
+In a vSphere cluster environment managed by vCenter, the networks are defined as distributed port groups, and the vSAN cluster communicates through the distributed port group `vsphere-vsan`.
+
+### <a id="vmcluster"></a>Virtual Machine Cluster Layer
+
+This layer provisions the virtual machines and Anti-Affinity rules to ensure application high availability on the upper layer.
+For a Greenplum cluster, there are two types of virtual machines: 
+
+- **Master virtual machines** are used to provision the Greenplum master and standby master nodes.
+- **Segment virtual machines** are used to provision Greenplum primary and mirror segment nodes.
+
+The vSAN cluster provides reliable storage for all the virtual machines, which store all the Greenplum data files under the data storage mounted on `/gpdata`.
+
+The master virtual machines are connected to the `gp-virtual-internal` network in order to support mirroring and interconnect traffic and to handle management operations via the Greenplum utilities such as `gpstart`, `gpstop`, etcetera.
+They are also connected to the `gp-virtual-etl-bar` network in order to support Extract, Transform, Load (ETL) and Backup and Restore (BAR) operations.
+In addition, the master virtual machines are connected to the `gp-virtual-external` network, which routes external traffic into the Greenplum cluster.
+
+The segment virtual machines are connected to the `gp-virtual-internal` network, which is used to handle mirroring and interconnect traffic.
+They are also connected to the `gp-virtual-etl-bar` network for Extract, Transform, Load (ETL) and Backup and Restore (BAR) operations.
+
+For more information on the different networks and their configuration, see [Setting Up vSphere Network](vsphere-network-setup.html). 
+
+This layer also defines the **Anti-Affinity** rules between the master and standby nodes, as well as between the primary and mirror pairs.
+In the diagram, the virtual machines `gp-1-mdw` and `gp-1-smdw` have an Anti-Affinity rule set to ensure that they are not deployed on the same ESXi host.
+Similar rules apply for the segment pair formed by `gp-1-sdw1` and `gp-1-sdw2`, and the pair made of `gp-1-sdw3` and `gp-1-sdw4`.
+
+### <a id="greenplum"></a>Greenplum Layer
+
+This layer is equivalent to what a Greenplum Database Administrator would normally interact with.
+The **Greenplum node** names match the traditional Greenplum node naming convention:
+
+- `mdw` for the Greenplum  master.
+- `smdw` for the Greenplum standby master.
+- `sdw*` for the Greenplum segments, both primaries and mirrors.
+
+Unlike traditional Greenplum clusters, where a segment host is running multiple segment instances, with VMware Tanzu Greenplum on Dell EMC VxRail there is only one segment instance per Greenplum node.
+
+This design leverages vSphere HA and DRS features in order to provide high availability on the virtual machine cluster layer, so that vSphere can ensure high availability at the application level. Some of the benefits of this configuration are:
+
+- Centralized storage.
+- Dynamically balanced load based on the current state of the cluster.
+- Virtual machines can be moved among ESXi hosts without affecting Greenplum high availability.
+- Simplified mirroring placement.
+- Better elasticity to handle ESXi hosts growth, as the virtual machines can be individually moved across hosts by DRS to balance the load if the cluster grows.
+
+In the architecture diagram, every pair of Greenplum nodes works together to provide application high availability for a given content ID.
+For example, content ID `-1` is provided by `mdw` and `smdw`, content ID `0` is provided by `sdw1` and `sdw2`, and content ID `1` is provided by `sdw3` and `sdw4`.
+
+Since each pair of Greenplum nodes is mapped to a pair of virtual machines configured with Anti-Affinity rules, the virtual machines serving the same content ID will never be on the same ESXi hosts.
+This architecture provides Greenplum high availability against a single ESXi host failure.
+

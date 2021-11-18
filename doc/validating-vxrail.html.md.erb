@@ -1,0 +1,125 @@
+---
+title: "Validating Dell EMC VxRail Setup Performance with HCIBench"
+---
+
+HCIBench stands for Hyper-converged Infrastructure Benchmark. It is an automation wrapper around open source benchmark tools that automates proof-of-concept performance testing across a cluster. The tool fully automates the end-to-end process of deploying test virtual machines, coordinating workload runs, aggregating test results, performance analysis, and collecting necessary data for troubleshooting purposes.
+
+The HCIBench 2.6.0 OVA file can be downloaded from VMware Fling. You can find more information about it on the [VMware Fling site](https://flings.vmware.com/hcibench).
+
+For the purpose of this installation, you download and configure HCIBench 2.6.0 in order to verify network connectivity and test vSAN performance. You will be able to estimate whether your platform is performing within the expected range of parameters. Running this tool can also help you identify configuration issues.
+
+<div class="note"><b>Note:</b> HCIBench requires that you turn off vSphere DRS while testing is running as it can cause virtual machine distribution imbalance. Once you have finished with this section, enable DRS again.</div>
+
+## <a id="deploy"></a>Deploying the HCIBench Virtual Machine
+
+1. In vCenter select your cluster and right click to choose **Deploy OVF Template**.
+
+1. Under **Select an OVF Template**, select **URL**, enter the following and click **Next**. If you have already downloaded the OVA, select **Local file** instead and point to your downloaded OVA file.
+
+    ```
+    https://download3.vmware.com/software/vmw-tools/hcibench/HCIBench_2.6.0.ova    
+    ```
+
+1. Accept the source verification.
+
+1. Select the datacenter, choose a name for the virtual machine, and click **Next**.
+
+1. Select the cluster and click **Next**. The template will start downloading.
+
+1. Review the details and click **Next**.
+
+1. Read and accept the license agreements and click **Next**.
+
+1. Select the vSAN datastore and click **Next**.
+
+1. Choose the `gp-virtual-external` port group for **Management Network**, and `gp-virtual-internal` for **VM Network**.
+
+    <img src="images/validate10.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Under **Customize Template**, settings are displayed for DHCP by default. If you are not using DHCP, enter the static IP network information for the `gp-virtual-external` network.
+
+    <img src="images/validate11.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Set the `root` password for the virtual machine and click **Next**.
+
+1. Verify the configuration and click **Finish**.
+
+    <img src="images/validate12.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. The HCIBench virtual machine will be deployed. You can check its progress under the **Recent Tasks** tab on the vSphere client.
+
+## <a id="using"></a>Using HCIBench
+
+1. Once deployment is complete, power on the virtual machine.  When the IP address has appeared in vCenter, open the HCIBench UI in your browser by accessing https://IPADDRESS:8443.
+
+1. Enter the `root` username and password you configured earlier and start configuring HCIBench.
+    - Enter vCenter hostname or IP address.
+    - Enter vCenter username as **greenplum@vsphere.local**.
+    - Enter vCenter Password as the password you configured for **greenplum@vsphere.local**.
+    - Enter the datacenter name.
+    - Enter the cluster name.
+    - The Resource Pool name field can remain blank. If using one, make sure that the resource pool exists.
+    - Leave the VM Folder Name as OPTIONAL.
+    - Enter the network name as `gp-virtual-internal`.
+    - Enable **You Don't Have DHCP?**, then select **Customize** from the drop-down menu.
+    - Enter the datastore name.
+    - Enter the storage policy as the one you configured in [Setting Up vSphere Storage](vsphere-storage-setup.html).
+    - Set Starting IP Address/Subnet Size to **192.168.10.1/24**.
+    - Enable **Clear Read/Write Cache Before Each Test Case**.
+    - Enter the ESXi host user name and password. This needs to be the same for all hosts.
+    - Disable **Easy Run**.
+    - Enable **Reuse VMs If Possible**.
+
+    <img src="images/validate14.png" style="margin-right: 10px; width: 624px; border: 1px;" /><br />
+
+1. Scroll down the page and configure the following:
+    - Select **FIO** for Benchmarking Tool.
+    - Set Number of VMs to the number of primary segments [planned](planning.html#vms) for your environment.
+    - Set Number of CPUs to **4**.
+    - Set Number of Data Disk to **8**.
+    - Set the Size of RAM in GBs to **8**.
+    - Set Size of Data Disk in GiB to **100**.
+
+1. Under **Testing Configuration**, you create and run three different tests: **Write**, **Long Write** and **Read**. Note that these must be created and run one at a time, and then deleted before creating a new one.
+    1. Enter a Test Name that is meaningful.
+    1. Under **Select a Workload Parameter File**, click **Add** and use the corresponding values for each test type:
+ 
+        |                             | Write      | Long Write   | Read       | 
+        | --------------------------- | :--------: | :----------: | :--------: |
+        | Number of Disks to Test     |   8        |     8        |   8        | 
+        | Working-Set Percentage      |  100       |    100       |  100       |
+        | Number of Threads Per Disk  |   4        |     4        |   4        |
+        | Block Size                  | 256K       |   256K       | 256K       |
+        | Read Percentage             |   0        |     0        |  100       |
+        | Random Percentage           |   0        |     0        |   0        |
+        | I/O Rate                    | OPTIONAL   | OPTIONAL     | OPTIONAL   | 
+        | Test Time                   |  600       |   3600       | 600        |
+        | Warmup Time                 |  60        |   1800       | 60         |
+        | Worker CPU Usage Percentage | OPTIONAL   | OPTIONAL     | OPTIONAL   |
+
+    1. Click **Submit** and **OK**.
+    1. Click the **Refresh** button next to **Select a Workload Parameter File** and select the one you just created from the dropdown menu.
+    1. For **Prepare Virtual Disk Before Testing** set to **ZERO** for the first run to initialize storage. Consecutive runs can be set to **NONE** as it will shorten the test duration.
+    1. Leave **Testing Duration (Seconds)** as **OPTIONAL**.
+    1. Disable **Delete VM After Testing**.
+
+        <img src="images/validate15.png" style="margin-right: 10px; width: 624px; border: 1px;">
+    1. Click **Save Config**.
+    1. Click **Validate Config**.
+        - If the tests fail, amend the highlighted errors, save, and validate your configuration again.
+        - If your configuration is correct, the tests will pass and you can begin the test.
+    1. Click **Start Test**.
+    1. Once the test is complete you can [review the results](#results). 
+
+1. In order to run a different test, you should first remove the current parameter file:
+    1. Next to **Select a Workload Parameter File**, select the current file and click **Delete**.
+    1. Go back to Step 4 and use the table above to create another test with the corresponding settings.
+
+## <a id="results"></a>Reviewing the Results
+
+Once the test completes, click on **Review Result**, access the directory with the test name and open the provided PDF report file to display a breakdown of the different parameters that the test has measured.
+
+## <a id="next"></a>Next Steps
+
+You are now ready to start setting up and deploying a Greenplum Database cluster on your Dell EMC VxRail with vSphere environment. Make sure that you have enabled vSphere DRS again and proceed to [Creating the Jumpbox Virtual Machine](jumpbox.html) to install a jumpbox virtual machine which you will use to run Terraform to provision the Greenplum Database virtual machines.
+

@@ -1,0 +1,32 @@
+---
+title: "Validating the Greenplum Installation"
+---
+
+Run the commands below from the master node as `gpadmin` user in order to validate basic functionality of the Greenplum cluster.
+
+1. Refresh the environment variables:
+
+    ```
+    $ source ~/.bashrc
+    ```
+
+1. Show the state of the Greenplum cluster:
+
+    ```
+    $ gpstate
+    ```
+
+1. Connect to the `postgres` database and check segment configuration information:
+
+    ```
+    $ psql postgres
+    postgres=# SELECT * FROM gp_segment_configuration ORDER BY hostname;
+    ```
+
+1. Once connected to the `postgres` database, verify that you can create a table, insert data to it and read it:
+
+    ```
+    postgres=# CREATE TABLE t AS SELECT generate_series(1, 1000000);
+    postgres=# SELECT MIN(cnt), MAX(cnt), COUNT(cnt) FROM (SELECT COUNT(*) cnt FROM t GROUP BY gp_segment_id) tt;
+    postgres=# DROP TABLE t;
+    ```

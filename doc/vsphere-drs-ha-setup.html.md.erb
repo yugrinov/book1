@@ -1,0 +1,83 @@
+---
+title: "Setting Up vSphere DRS and HA"
+---
+
+Distributed Resource Scheduler (DRS) is responsible for moving virtual machines across ESXi hosts using vSphere vMotion and following a given policy, based on [vSphere Anti-Affinity rules](https://docs.vmware.com/en/VMware-vSphere/7.0/com.vmware.vsphere.resmgmt.doc/GUID-FC84ECD9-C7DA-4D27-B5EC-0C8E396A6800.html). The vSphere Anti-Affinity rules for this reference architecture are configured as part of the script in [Allocating the Virtual Machines with Terraform](allocating-vms.html) to make sure that the Greenplum Database primary and mirror segments for the same content ID are never running on the same ESXi hosts. The same rules will apply for the Greenplum master and standby master.
+
+High Availability (HA) is responsible for restarting virtual machines on other vSphere hosts in the cluster without manual intervention when a host outage is detected.
+
+Combined, the two features ensure that the Greenplum Database cluster keeps running in case of an ESXi host outage. See [Managing Single Host Failures in Dell EMC VxRail](host-failure.html) for more information.
+
+## <a id="drs"></a>Enabling DRS
+
+On the vSphere Client Home page, navigate to **vCenter** -> Select your Cluster -> **Configure** -> **Services** -> **vSphere DRS**.
+
+Click the **Edit** button and enable vSphere DRS, then configure the following settings:
+
+- Automation
+    - Automation Level: **Fully Automated**
+    - Migration Threshold: **Default**
+    - Predictive DRS: **Disabled**
+    - Virtual Machine Automation: **Enabled**
+- Additional Options
+    - VM Distribution: **Disabled**
+    - CPU Over-Commitment: not configured
+    - Scalable Shares: **Disabled**
+- Power Management
+    - DPM : **Off**
+    - Automation Level: **Off**
+    - DPM Threshold: **Disabled**
+- Advanced Options:
+    - None
+
+<img src="images/enable-drs.png" class="image" width="630" alt="centered image"/>
+
+## <a id="ha"></a>Enabling HA
+
+On the vSphere Client Home page, navigate to **vCenter** -> Select your Cluster -> **Configure** -> **Services** -> **vSphere Availability**.
+
+Click the **Edit** button and enable vSphere HA, then configure the following settings:
+
+- Failures and Responses
+    - Enable Host Monitoring: **On**
+    - Host Failure Response:
+        - Failure Response: **Restart VMs**
+        - Default VM restart priority: **Medium**
+        - VM dependency restart condition: **Resources allocated**
+        - Additional delay: **0 seconds**
+        - VM restart priority condition timeout: **600 seconds**
+    - Response for Host Isolation: **Power off and restart VMs**
+    - Datastore with PDL: **Power off and restart VMs**
+    - Datastore with APD: **Power off and restart VMs - Aggressive restart policy**
+        - Response recovery: **Reset VMs**
+        - Response delay: **3 minutes**
+    - VM Monitoring: **VM Monitoring Only**
+        - VM monitoring sensitivity: **Custom**
+        - Failure interval: **30 seconds**
+        - Minimum uptime: **120 seconds**
+        - Maximum per-VM resets: **3**
+        - Maximum resets time window: **No window**
+ 
+<img src="images/ha-failures.png" class="image" width="630" alt="centered image"/>
+
+- Admission Control
+    - Host failures cluster tolerates: **1**
+    - Define host failover capacity by: **Cluster resource Percentage**
+    - Performance degradation VMs tolerate: **100%**
+
+<img src="images/ha-admission.png" class="image" width="630" alt="centered image"/>
+
+- Heartbeat Datastores
+    - Automatically select datastores accessible from the hosts
+
+- Advanced Options
+    - None
+
+Make sure that **Proactive HA** is turned **OFF**.
+
+<img src="images/proactive.png" class="image" width="630" alt="centered image"/>
+
+## <a id="next"></a>Next Steps
+
+- If you are not planning on using encryption for your VMware Tanzu Greenplum on Dell EMC VxRail environment, proceed to [Setting Up vSphere Storage](vsphere-storage-setup.html) to configure the vSphere storage policies.
+- Visit [Setting Up vSphere Encryption](encryption.html) in order to explore the different encryption options and set up the chosen type of encryption and its corresponding storage policies.
